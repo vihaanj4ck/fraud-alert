@@ -14,10 +14,9 @@ const EXTERNAL_ASSET_DEDUCT = 15;
 
 const BART_LABELS = [
   "official portal",
-  "neutral information",
-  "urgent security alert",
-  "prize giveaway scam",
-  "suspicious landing page",
+  "phishing scam",
+  "urgent warning",
+  "prize giveaway",
 ];
 
 function getHostnameAndTld(urlString) {
@@ -151,28 +150,28 @@ export async function POST(request) {
         };
 
         const officialScore = getScore("official");
+        const phishingScore = getScore("phishing");
         const urgentScore = getScore("urgent");
-        const prizeScamScore = getScore("prize") || getScore("scam");
-        const suspiciousScore = getScore("suspicious");
+        const prizeScore = getScore("prize");
 
         const threatDeduct = Math.round(
-          urgentScore * 50 + prizeScamScore * 50
+          phishingScore * 50 + urgentScore * 50 + prizeScore * 50
         );
         if (threatDeduct > 0) {
           score -= threatDeduct;
+          if (phishingScore > 0.3)
+            findings.push(
+              `Phishing scam signals in content (${Math.round(phishingScore * 100)}% confidence).`
+            );
           if (urgentScore > 0.3)
             findings.push(
-              `High-pressure urgency detected in site metadata (${Math.round(urgentScore * 100)}% confidence).`
+              `Urgent warning / high-pressure tone (${Math.round(urgentScore * 100)}% confidence).`
             );
-          if (prizeScamScore > 0.3)
+          if (prizeScore > 0.3)
             findings.push(
-              `Prize or giveaway scam signals in content (${Math.round(prizeScamScore * 100)}% confidence).`
+              `Prize giveaway scam signals (${Math.round(prizeScore * 100)}% confidence).`
             );
         }
-        if (suspiciousScore > 0.3)
-          findings.push(
-            `Suspicious landing page tone (${Math.round(suspiciousScore * 100)}% confidence).`
-          );
 
         const officialAdd = Math.round(officialScore * 10);
         if (officialAdd > 0) {

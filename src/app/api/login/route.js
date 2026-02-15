@@ -85,7 +85,7 @@ export async function POST(request) {
       );
     }
 
-    if (user.accountStatus === "BANNED") {
+    if (user.accountStatus === "BANNED" || user.isBanned === true) {
       return NextResponse.json(
         { error: "Your account has been banned due to suspicious activity." },
         { status: 403 }
@@ -102,6 +102,7 @@ export async function POST(request) {
 
     const { risk, triggeredSignals } = computeLoginRisk(user, currentIP, deviceId);
 
+    const device = [deviceModel, os].filter(Boolean).join(" / ") || (userAgent ? userAgent.slice(0, 120) : "Unknown");
     const ipLogEntry = {
       ip: currentIP || "",
       deviceModel: deviceModel || "Unknown",
@@ -117,7 +118,7 @@ export async function POST(request) {
       $push: {
         loginHistory: {
           ip: currentIP || "",
-          deviceId: deviceId || "",
+          device: device || "Unknown",
           timestamp: new Date(),
         },
         ipLogs: { $each: [ipLogEntry], $slice: -100 },

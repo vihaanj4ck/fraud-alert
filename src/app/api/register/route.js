@@ -40,6 +40,7 @@ export async function POST(request) {
       email,
       password: hashedPassword,
       accountStatus: "ACTIVE",
+      isBanned: false,
       savedCards: [],
       ipLogs: [],
       loginHistory: [],

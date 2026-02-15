@@ -4,11 +4,12 @@ dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
 import { MongoClient } from "mongodb";
 
-const CONNECT_TIMEOUT_MS = 5000;
+const CONNECT_TIMEOUT_MS = 30000; // 30 seconds to bypass local network lag
+const SOCKET_TIMEOUT_MS = 30000;
 
 const options = {
   connectTimeoutMS: CONNECT_TIMEOUT_MS,
-  socketTimeoutMS: 45000,
+  socketTimeoutMS: SOCKET_TIMEOUT_MS,
 };
 
 function maskUriPassword(uriString) {
@@ -18,59 +19,6 @@ function maskUriPassword(uriString) {
   } catch {
     return "(unable to mask)";
   }
-}
-
-const rawUri = process.env.MONGODB_URI;
-console.log("[mongodb] MONGODB_URI:", maskUriPassword(rawUri));
-
-if (!rawUri) {
-  throw new Error("MONGODB_URI is missing from environment variables");
-}
-
-const uri = rawUri.trim();
-const isValidUri =
-  uri.toLowerCase().startsWith("mongodb://") || uri.toLowerCase().startsWith("mongodb+srv://");
-
-if (!isValidUri) {
-  throw new Error(
-    "MONGODB_URI must start with mongodb:// or mongodb+srv://. Got: " + uri.substring(0, 20) + "..."
-  );
-}
-
-let client;
-let clientPromise;
-let _resolved = false;
-
-const connectPromise = (() => {
-  if (process.env.NODE_ENV === "development" && global._mongoClientPromise) {
-    return global._mongoClientPromise;
-  }
-  client = new MongoClient(uri, options);
-  const p = client.connect();
-  if (process.env.NODE_ENV === "development") {
-    global._mongoClientPromise = p;
-  }
-  return p;
-})();
-
-clientPromise = Promise.race([
-  connectPromise,
-  new Promise((_, reject) =>
-    setTimeout(
-      () => reject(new Error("Database Connection Failed. Check DNS/IP Whitelist.")),
-      CONNECT_TIMEOUT_MS
-    )
-  ),
-]).then((c) => {
-  _resolved = true;
-  return c;
-});
-
-export default clientPromise;
-
-/** @returns {Promise<import("mongodb").MongoClient>} */
-export async function connectToDatabase() {
-  return clientPromise;
 }
 
 function isConnectionError(err) {
@@ -83,6 +31,90 @@ function isConnectionError(err) {
     msg.includes("ETIMEDOUT") ||
     msg.includes("ENOTFOUND")
   );
+}
+
+/**
+ * Mock collection used when MongoDB is unavailable. Keeps the app running for demo.
+ * insertOne rejects so callers can fall back to file logging; findOne/updateOne no-op.
+ */
+function createMockCollection() {
+  return {
+    insertOne() {
+      return Promise.reject(new Error("Database unavailable (mock)."));
+    },
+    findOne() {
+      return Promise.resolve(null);
+    },
+    updateOne() {
+      return Promise.resolve({ modifiedCount: 0, matchedCount: 0 });
+    },
+    insertMany() {
+      return Promise.reject(new Error("Database unavailable (mock)."));
+    },
+    find() {
+      return { toArray: () => Promise.resolve([]) };
+    },
+    deleteOne() {
+      return Promise.resolve({ deletedCount: 0 });
+    },
+    deleteMany() {
+      return Promise.resolve({ deletedCount: 0 });
+    },
+  };
+}
+
+function createMockClient() {
+  const mockColl = createMockCollection();
+  return {
+    db() {
+      return {
+        collection() {
+          return mockColl;
+        },
+      };
+    },
+  };
+}
+
+const rawUri = process.env.MONGODB_URI;
+console.log("[mongodb] MONGODB_URI:", maskUriPassword(rawUri));
+
+const uri = rawUri && typeof rawUri === "string" ? rawUri.trim() : "";
+const isValidUri =
+  uri &&
+  (uri.toLowerCase().startsWith("mongodb://") || uri.toLowerCase().startsWith("mongodb+srv://"));
+
+let client;
+let clientPromise;
+
+if (!uri || !isValidUri) {
+  console.warn("[mongodb] MONGODB_URI missing or invalid. Using mock DB so the app keeps running.");
+  clientPromise = Promise.resolve(createMockClient());
+} else {
+  // Single global promise to prevent multiple connections (especially in dev)
+  if (process.env.NODE_ENV === "development" && global._mongoClientPromise) {
+    clientPromise = global._mongoClientPromise;
+  } else {
+    client = new MongoClient(uri, options);
+    clientPromise = client.connect();
+    if (process.env.NODE_ENV === "development") {
+      global._mongoClientPromise = clientPromise;
+    }
+  }
+
+  clientPromise = clientPromise
+    .then((c) => c)
+    .catch((err) => {
+      console.warn("[mongodb] Connection failed:", err.message, "- using mock DB so the app keeps running.");
+      return createMockClient();
+    });
+}
+
+export default clientPromise;
+
+/** @returns {Promise<import("mongodb").MongoClient>} */
+export async function connectToDatabase() {
+  return clientPromise;
 }
 
 export function getConnectionErrorMessage(err) {

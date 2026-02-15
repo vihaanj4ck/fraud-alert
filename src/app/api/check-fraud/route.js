@@ -1,8 +1,41 @@
 import { NextResponse } from "next/server";
+import fs from "node:fs/promises";
+import path from "node:path";
 import axios from "axios";
-import { getTransactionsCollection } from "@/lib/mongodb";
+import { getTransactionsCollection, getUsersCollection } from "@/lib/mongodb";
+
+const FRAUD_LOG_FILE = path.join(process.cwd(), "fraud_logs.txt");
+
+async function appendFraudLog(record) {
+  try {
+    const line = JSON.stringify({ ...record, _ts: new Date().toISOString() }) + "\n";
+    await fs.appendFile(FRAUD_LOG_FILE, line);
+  } catch (err) {
+    console.error("[check-fraud] fraud_logs.txt write failed:", err.message);
+  }
+}
 
 const HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli";
+
+const IMPOSSIBLE_TRAVEL_HOURS = 2;
+const ADDRESS_GIBBERISH_THRESHOLD = 0.8;
+const RESTRICTED_ISPS = [
+  "google cloud",
+  "google llc",
+  "amazon",
+  "aws",
+  "digitalocean",
+  "digital ocean",
+  "microsoft",
+  "azure",
+  "cloudflare",
+  "linode",
+  "vultr",
+  "ovh",
+  "choopa",
+  "vpn",
+  "proxy",
+];
 
 const KNOWN_CITIES = [
   "mumbai",
@@ -152,24 +185,78 @@ function getVelocityRisk(firstItemAddedAt, checkoutPageLandedAt) {
 }
 
 /**
- * Geolocation: fetch city from ipapi.co; if not in known list, +5%.
+ * Geolocation + ISP: fetch city and org from ipapi.co.
  */
-async function getGeoRisk(clientIp) {
-  if (!clientIp || clientIp === "127.0.0.1" || clientIp === "::1") return { risk: 0, city: "local" };
+async function getGeoAndIsp(clientIp) {
+  if (!clientIp || clientIp === "127.0.0.1" || clientIp === "::1") {
+    return { risk: 0, city: "local", org: "" };
+  }
   try {
     const res = await axios.get(`https://ipapi.co/${clientIp}/json/`, {
       timeout: 5000,
       validateStatus: () => true,
     });
-    if (res.status !== 200) return { risk: 0, city: "unknown" };
+    if (res.status !== 200) return { risk: 0, city: "unknown", org: "" };
     const city = (res.data?.city || "").toString().trim().toLowerCase();
     const region = (res.data?.region || "").toString().trim().toLowerCase();
+    const org = (res.data?.org || "").toString().trim().toLowerCase();
     const combined = `${city} ${region}`;
     const isKnown = KNOWN_CITIES.some((c) => city.includes(c) || region.includes(c) || combined.includes(c));
-    return { risk: isKnown ? 0 : 5, city: city || "unknown" };
+    return { risk: isKnown ? 0 : 5, city: city || "unknown", org };
   } catch (err) {
     console.warn("[check-fraud] ipapi.co failed:", err.message);
-    return { risk: 0, city: "unknown" };
+    return { risk: 0, city: "unknown", org: "" };
+  }
+}
+
+function isRestrictedIsp(org) {
+  if (!org) return false;
+  const lower = org.toLowerCase();
+  return RESTRICTED_ISPS.some((name) => lower.includes(name));
+}
+
+/**
+ * Address integrity: BART labels for shipping name + address.
+ */
+async function getAddressIntegrityRisk(shippingName, shippingAddress) {
+  const text = [shippingName, shippingAddress].filter(Boolean).join(" ").trim();
+  if (!text) return { block: false, score: 0 };
+  const token = process.env.HF_TOKEN;
+  if (!token) return { block: false, score: 0 };
+  const labels = [
+    "valid residential address",
+    "gibberish or test data",
+    "commercial warehouse",
+  ];
+  try {
+    const res = await fetch(HF_INFERENCE_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        inputs: `Shipping: ${text}`,
+        parameters: { candidate_labels: labels, multi_label: false },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json();
+    if (!res.ok) return { block: false, score: 0 };
+    let out = Array.isArray(data) && data[0] ? data[0] : data;
+    const scores = out.scores || [];
+    const labelsOut = out.labels || [];
+    const idx = labelsOut.findIndex(
+      (l) => l && String(l).toLowerCase().includes("gibberish")
+    );
+    const gibberishScore = idx >= 0 ? scores[idx] ?? 0 : 0;
+    return {
+      block: gibberishScore > ADDRESS_GIBBERISH_THRESHOLD,
+      score: gibberishScore,
+    };
+  } catch (err) {
+    console.warn("[check-fraud] address BART failed:", err.message);
+    return { block: false, score: 0 };
   }
 }
 
@@ -196,6 +283,10 @@ async function getAiCartRisk(productNames) {
   const labels = [
     "coherent related products typically bought together",
     "unrelated or anomalous mix of products",
+    "official portal",
+    "phishing scam",
+    "urgent warning",
+    "prize giveaway",
   ];
 
   try {
@@ -227,13 +318,25 @@ async function getAiCartRisk(productNames) {
     if (Array.isArray(data) && data[0]) data = data[0];
     const scores = data.scores || [];
     const labelsOut = data.labels || [];
-    const idx = labelsOut.findIndex((l) => l && String(l).toLowerCase().includes("unrelated"));
-    const unrelatedScore = idx >= 0 ? scores[idx] || 0 : 0;
-    const anomalous = unrelatedScore > 0.5;
+    const getScore = (key) => {
+      const i = labelsOut.findIndex((l) => l && String(l).toLowerCase().includes(key));
+      return i >= 0 ? scores[i] ?? 0 : 0;
+    };
+    const unrelatedScore = getScore("unrelated");
+    const phishingScore = getScore("phishing");
+    const urgentScore = getScore("urgent");
+    const prizeScore = getScore("prize");
+    const threatScore = Math.max(phishingScore, urgentScore, prizeScore);
+    const anomalous = unrelatedScore > 0.5 || threatScore > 0.5;
+    const label = anomalous
+      ? threatScore > unrelatedScore
+        ? "scam or threat signals in cart"
+        : "unrelated or anomalous mix"
+      : "coherent related products";
     return {
-      risk: anomalous ? 50 : 0, // Higher weight so AI+Velocity can exceed 70%
-      label: anomalous ? "unrelated or anomalous mix" : "coherent related products",
-      score: unrelatedScore,
+      risk: anomalous ? 50 : 0,
+      label,
+      score: Math.max(unrelatedScore, threatScore),
     };
   } catch (err) {
     console.error("HF API Error:", err.message);
@@ -261,6 +364,89 @@ export async function POST(request) {
   const mobile = body.mobile ?? "";
   const email = body.email ?? "";
   const cardNumber = body.cardNumber ?? "";
+  const userId = body.userId ?? null;
+  const shippingName = (body.shippingName ?? body.name ?? "").toString().trim();
+  const shippingAddress = (body.shippingAddress ?? body.address ?? "").toString().trim();
+
+  const clientIp = getClientIp(request);
+  const geo = await getGeoAndIsp(clientIp);
+
+  let blockReason = null;
+
+  // --- 1. ISP / Proxy filter ---
+  if (isRestrictedIsp(geo.org)) {
+    blockReason = "Proxy Usage";
+  }
+
+  // --- 2. Address integrity (BART) ---
+  if (!blockReason && (shippingName || shippingAddress)) {
+    const addressCheck = await getAddressIntegrityRisk(shippingName, shippingAddress);
+    if (addressCheck.block) blockReason = "Bot Address";
+  }
+
+  // --- 3. Impossible travel ---
+  if (!blockReason && userId && userId !== "guest") {
+    try {
+      const usersColl = await getUsersCollection();
+      const user = await usersColl.findOne({ email: userId });
+      const lastCity = (user?.lastKnownCity ?? "").toString().trim().toLowerCase();
+      const lastTs = user?.lastTimestamp ? new Date(user.lastTimestamp).getTime() : 0;
+      const now = Date.now();
+      const currentCity = (geo.city ?? "").trim().toLowerCase();
+      const twoHoursMs = IMPOSSIBLE_TRAVEL_HOURS * 60 * 60 * 1000;
+      if (
+        lastCity &&
+        currentCity &&
+        lastCity !== currentCity &&
+        lastTs > 0 &&
+        now - lastTs < twoHoursMs
+      ) {
+        blockReason = "Impossible Travel";
+      }
+    } catch (err) {
+      console.warn("[check-fraud] impossible travel check failed:", err.message);
+    }
+  }
+
+  if (blockReason) {
+    const record = {
+      userId,
+      clientIp,
+      totalAmount: Number(body.totalAmount) || 0,
+      cartQuantity,
+      productNames,
+      firstItemAddedAt,
+      mobile: mobile ? String(mobile).slice(0, 20) : null,
+      email: email ? String(email).slice(0, 128) : null,
+      riskBreakdown: {},
+      finalScore: 100,
+      status: "Blocked",
+      reasoning: `Blocked: ${blockReason}`,
+      triggeredSignals: [{ label: `Risk: ${blockReason}`, points: 100, key: "advanced" }],
+      geoCity: geo.city,
+      blockReason,
+      createdAt: new Date(),
+      outcome: "blocked",
+    };
+    try {
+      const coll = await getTransactionsCollection();
+      const { insertedId } = await coll.insertOne(record);
+      record._id = insertedId;
+    } catch (dbErr) {
+      console.error("[check-fraud] MongoDB insert failed:", dbErr.message);
+      await appendFraudLog(record);
+    }
+    return NextResponse.json({
+      finalScore: 100,
+      status: "Blocked",
+      reason: blockReason,
+      blockReason,
+      reasoning: `Risk Detected: ${blockReason}. Transaction blocked.`,
+      triggeredSignals: [],
+      riskBreakdown: {},
+      transactionId: record._id?.toString(),
+    });
+  }
 
   const triggeredSignals = [];
   let cartQuantityRisk = getCartQuantityRisk(cartQuantity);
@@ -282,8 +468,6 @@ export async function POST(request) {
     });
   }
 
-  const clientIp = getClientIp(request);
-  const geo = await getGeoRisk(clientIp);
   if (geo.risk > 0) {
     triggeredSignals.push({
       label: `Location not in known cities (${geo.city})`,
@@ -379,19 +563,38 @@ export async function POST(request) {
     record._id = insertedId;
   } catch (dbErr) {
     console.error("[check-fraud] MongoDB transactions insert failed:", dbErr.message);
+    await appendFraudLog(record);
   }
 
   if (status === "Blocked") {
+    const scoreBlockReason = scamDetected ? "Scam Detected" : "High Security Risk";
+    record.blockReason = scoreBlockReason;
     return NextResponse.json({
       finalScore,
       status: "Blocked",
-      reason: scamDetected ? "Scam Detected" : "High Security Risk",
+      reason: scoreBlockReason,
+      blockReason: scoreBlockReason,
       scamDetected: !!scamDetected,
       reasoning,
       triggeredSignals,
       riskBreakdown,
       transactionId: record._id?.toString(),
     });
+  }
+
+  // On Allowed: update user's lastKnownCity and lastTimestamp for impossible-travel next time
+  const uid = body.userId ?? null;
+  if (uid && uid !== "guest" && geo.city) {
+    try {
+      const usersColl = await getUsersCollection();
+      await usersColl.updateOne(
+        { email: uid },
+        { $set: { lastKnownCity: geo.city, lastTimestamp: new Date() } },
+        { upsert: false }
+      );
+    } catch (err) {
+      console.warn("[check-fraud] user lastKnownCity update failed:", err.message);
+    }
   }
 
   return NextResponse.json({

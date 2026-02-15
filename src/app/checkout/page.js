@@ -176,17 +176,20 @@ function TransactionFailedOverlay({ open, reason, onClose }) {
   );
 }
 
-function FraudDetectedModal({ open, redirectIn, scamDetected }) {
+function FraudDetectedModal({ open, redirectIn, scamDetected, blockReason }) {
   if (!open) return null;
+  const useBlockReason = Boolean(blockReason);
   return (
     <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-900/95 p-4 text-center text-white">
       <p className="text-2xl font-bold text-red-400">
-        {scamDetected ? "🚨 SCAM DETECTED" : "🚨 FRAUD DETECTED"}
+        {useBlockReason ? "🚨 RISK DETECTED" : scamDetected ? "🚨 SCAM DETECTED" : "🚨 FRAUD DETECTED"}
       </p>
       <p className="mt-2 text-lg">
-        {scamDetected
-          ? "AI analysis and velocity patterns indicate potential fraud. Payment blocked."
-          : "Transaction Cancelled for your safety."}
+        {useBlockReason
+          ? `Risk Detected: ${blockReason}. Payment blocked.`
+          : scamDetected
+            ? "AI analysis and velocity patterns indicate potential fraud. Payment blocked."
+            : "Transaction Cancelled for your safety."}
       </p>
       <p className="mt-4 text-sm text-slate-300">Redirecting to homepage in {redirectIn} seconds...</p>
     </div>
@@ -245,6 +248,7 @@ export default function CheckoutPage() {
   const [checkoutLandedAt, setCheckoutLandedAt] = useState(null);
   const [fraudDetected, setFraudDetected] = useState(false);
   const [scamDetected, setScamDetected] = useState(false);
+  const [blockReason, setBlockReason] = useState(null);
   const [fraudCountdown, setFraudCountdown] = useState(3);
   const [accountBanned, setAccountBanned] = useState(false);
   const checkoutLandedAtRef = useRef(null);
@@ -256,14 +260,14 @@ export default function CheckoutPage() {
     if (minTimePassed && requestDone) setShowOverlay(false);
   }, [minTimePassed, requestDone]);
 
-  // Redirect banned users to account-banned page
+  // Redirect banned users to /banned page
   useEffect(() => {
     const token = getToken?.();
     if (!token) return;
     fetch("/api/me", { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())
       .then((data) => {
-        if (data.banned) router.replace("/account-banned");
+        if (data.banned) router.replace("/banned");
       })
       .catch(() => {});
   }, [getToken, router]);
@@ -325,7 +329,25 @@ export default function CheckoutPage() {
       setFailedOverlay(true);
       return;
     }
-    // Velocity security: log IP + Browser + OS + Device; if >3 distinct combos in 10 min, ban and redirect
+    // IP velocity ban: if logged in, check loginHistory (last 10 min) for >3 unique IPs → ban & redirect to /banned
+    if (user?.email && getToken?.()) {
+      try {
+        const checkoutRes = await fetch("/api/checkout", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${getToken()}`,
+          },
+        });
+        if (checkoutRes.status === 403) {
+          setAccountBanned(true);
+          router.replace("/banned");
+          return;
+        }
+      } catch (_) {
+        // do not block if checkout API fails (e.g. network)
+      }
+    }
     const userId = user?.email || (email || mobile || "guest").toString().trim() || "guest";
     try {
       const ipRes = await fetch("/api/ip/log", {
@@ -336,7 +358,7 @@ export default function CheckoutPage() {
       const ipData = await ipRes.json().catch(() => ({}));
       if (ipData && (ipData.banned === true || ipData.highRisk === true)) {
         setAccountBanned(true);
-        router.replace("/account-banned");
+        router.replace("/banned");
         return;
       }
     } catch (_) {
@@ -364,7 +386,7 @@ export default function CheckoutPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: null,
+          userId: user?.email ?? null,
           totalAmount: totalPrice,
           cartQuantity,
           productNames,
@@ -373,6 +395,8 @@ export default function CheckoutPage() {
           mobile: mobile.trim(),
           email: email.trim(),
           cardNumber: paymentMethod === PAYMENT_METHODS.card ? cardNumber.replace(/\D/g, "") : "",
+          shippingName: name.trim(),
+          shippingAddress: address.trim(),
           cartItems: items.map((i) => ({ product: i.product, quantity: i.quantity })),
         }),
       });
@@ -382,14 +406,18 @@ export default function CheckoutPage() {
 
       if (Number(data.finalScore) >= 60 || data.status === "Blocked") {
         setScamDetected(!!data.scamDetected);
+        setBlockReason(data.blockReason || null);
         if (data.transactionId) {
+          const failureReason = data.blockReason
+            ? `Risk Detected: ${data.blockReason}. Transaction blocked.`
+            : "Fraud detected: risk >= 60%, transaction cancelled";
           fetch("/api/transactions", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               transactionId: data.transactionId,
               outcome: "failed",
-              failureReason: "Fraud detected: risk >= 60%, transaction cancelled",
+              failureReason,
             }),
           }).catch(() => {});
         }
@@ -536,7 +564,7 @@ export default function CheckoutPage() {
     <div className="flex min-h-screen flex-col bg-slate-50">
       <SecurityOverlay show={showOverlay} onMinTimeElapsed={() => setMinTimePassed(true)} />
       <TransactionFailedOverlay open={failedOverlay} reason={failedReason} onClose={() => setFailedOverlay(false)} />
-      <FraudDetectedModal open={fraudDetected} redirectIn={fraudCountdown} scamDetected={scamDetected} />
+      <FraudDetectedModal open={fraudDetected} redirectIn={fraudCountdown} scamDetected={scamDetected} blockReason={blockReason} />
       <OtpModal
         open={otpModalOpen}
         demoOtp={demoOtp}

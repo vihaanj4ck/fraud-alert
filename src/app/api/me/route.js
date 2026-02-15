@@ -19,7 +19,7 @@ export async function GET(request) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    if (user.accountStatus === "BANNED") {
+    if (user.accountStatus === "BANNED" || user.isBanned === true) {
       return NextResponse.json(
         { error: "Account banned", banned: true },
         { status: 403 }
