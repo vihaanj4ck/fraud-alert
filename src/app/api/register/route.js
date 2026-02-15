@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getUsersCollection, getConnectionErrorMessage } from "@/lib/mongodb";
+import { connectToDatabase, getUsersCollection } from "@/lib/mongodb";
 
 export async function POST(request) {
   try {
+    await connectToDatabase();
     const body = await request.json();
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
@@ -23,9 +24,7 @@ export async function POST(request) {
       );
     }
 
-    const collection = await getUsersCollection().catch((e) => {
-      throw new Error(getConnectionErrorMessage(e));
-    });
+    const collection = await getUsersCollection();
     const existing = await collection.findOne({ email });
     if (existing) {
       return NextResponse.json(
@@ -54,9 +53,10 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, email });
   } catch (err) {
-    console.error("[register]", err);
+    const message = err?.message ?? String(err);
+    console.error("[register] Database/registration error:", message, err);
     return NextResponse.json(
-      { error: getConnectionErrorMessage(err) },
+      { error: message },
       { status: 500 }
     );
   }
