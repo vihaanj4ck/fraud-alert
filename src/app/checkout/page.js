@@ -8,6 +8,7 @@ import Footer from "@/components/Footer";
 import SecurityOverlay from "@/components/SecurityOverlay";
 import { useLanguage } from "@/context/LanguageContext";
 import { useCart } from "@/context/CartContext";
+import { useAuth } from "@/context/AuthContext";
 
 const PAYMENT_METHODS = { card: "card", upi: "upi", cod: "cod" };
 const VELOCITY_THRESHOLD_MS = 15 * 1000;
@@ -175,12 +176,18 @@ function TransactionFailedOverlay({ open, reason, onClose }) {
   );
 }
 
-function FraudDetectedModal({ open, redirectIn }) {
+function FraudDetectedModal({ open, redirectIn, scamDetected }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-900/95 p-4 text-center text-white">
-      <p className="text-2xl font-bold text-red-400">🚨 FRAUD DETECTED</p>
-      <p className="mt-2 text-lg">Transaction Cancelled for your safety.</p>
+      <p className="text-2xl font-bold text-red-400">
+        {scamDetected ? "🚨 SCAM DETECTED" : "🚨 FRAUD DETECTED"}
+      </p>
+      <p className="mt-2 text-lg">
+        {scamDetected
+          ? "AI analysis and velocity patterns indicate potential fraud. Payment blocked."
+          : "Transaction Cancelled for your safety."}
+      </p>
       <p className="mt-4 text-sm text-slate-300">Redirecting to homepage in {redirectIn} seconds...</p>
     </div>
   );
@@ -208,6 +215,7 @@ function PaymentMethodBadges() {
 export default function CheckoutPage() {
   const router = useRouter();
   const { t } = useLanguage();
+  const { user, getToken } = useAuth();
   const { items, totalPrice, totalItems, firstItemAddedAt, clearCart } = useCart();
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
@@ -236,6 +244,7 @@ export default function CheckoutPage() {
   const [velocityRiskPersistent, setVelocityRiskPersistent] = useState(null);
   const [checkoutLandedAt, setCheckoutLandedAt] = useState(null);
   const [fraudDetected, setFraudDetected] = useState(false);
+  const [scamDetected, setScamDetected] = useState(false);
   const [fraudCountdown, setFraudCountdown] = useState(3);
   const [accountBanned, setAccountBanned] = useState(false);
   const checkoutLandedAtRef = useRef(null);
@@ -246,6 +255,18 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (minTimePassed && requestDone) setShowOverlay(false);
   }, [minTimePassed, requestDone]);
+
+  // Redirect banned users to account-banned page
+  useEffect(() => {
+    const token = getToken?.();
+    if (!token) return;
+    fetch("/api/me", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.banned) router.replace("/account-banned");
+      })
+      .catch(() => {});
+  }, [getToken, router]);
 
   // On checkout page load: record landing time once and set persistent velocity risk (first item → checkout page)
   useEffect(() => {
@@ -304,20 +325,18 @@ export default function CheckoutPage() {
       setFailedOverlay(true);
       return;
     }
-    // IP tracking: log this attempt; if >2 distinct IPs in 5 min, ban and block (never block on API failure)
+    // Velocity security: log IP + Browser + OS + Device; if >3 distinct combos in 10 min, ban and redirect
+    const userId = user?.email || (email || mobile || "guest").toString().trim() || "guest";
     try {
       const ipRes = await fetch("/api/ip/log", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accountId: (email || mobile || "guest").toString().trim() || "guest",
-        }),
+        body: JSON.stringify({ userId, accountId: userId }),
       });
       const ipData = await ipRes.json().catch(() => ({}));
       if (ipData && (ipData.banned === true || ipData.highRisk === true)) {
-        setFailedReason("ACCOUNT BANNED: Too many IP addresses detected.");
         setAccountBanned(true);
-        setFailedOverlay(true);
+        router.replace("/account-banned");
         return;
       }
     } catch (_) {
@@ -362,6 +381,7 @@ export default function CheckoutPage() {
       setFraudResult(data);
 
       if (Number(data.finalScore) >= 60 || data.status === "Blocked") {
+        setScamDetected(!!data.scamDetected);
         if (data.transactionId) {
           fetch("/api/transactions", {
             method: "PATCH",
@@ -444,6 +464,20 @@ export default function CheckoutPage() {
           }),
         });
       }
+      if (paymentMethod === PAYMENT_METHODS.card && cardNumber) {
+        const last4 = cardNumber.replace(/\D/g, "").slice(-4);
+        const token = getToken?.();
+        if (last4.length === 4 && token) {
+          fetch("/api/account/save-card", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ last4, brand: "Card" }),
+          }).catch(() => {});
+        }
+      }
       setSuccess(true);
       clearCart();
     } catch (err) {
@@ -471,7 +505,7 @@ export default function CheckoutPage() {
         <main className="mx-auto flex flex-1 items-center justify-center px-4 py-12">
           <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
             <p className="text-slate-600">Your cart is empty.</p>
-            <Link href="/products" className="mt-4 inline-block text-emerald-600 hover:underline">
+            <Link href="/shop" className="mt-4 inline-block text-amber-600 hover:underline">
               Continue shopping
             </Link>
           </div>
@@ -488,7 +522,7 @@ export default function CheckoutPage() {
         <main className="mx-auto flex flex-1 items-center justify-center px-4 py-12">
           <div className="rounded-2xl border border-emerald-200 bg-white p-8 text-center shadow-sm">
             <p className="text-xl font-semibold text-emerald-700">{t("checkout.transactionSuccess")}</p>
-            <Link href="/products" className="mt-4 inline-block rounded-lg bg-slate-900 px-6 py-2 text-white hover:bg-slate-800">
+            <Link href="/shop" className="mt-4 inline-block rounded-lg bg-amber-500 px-6 py-2 text-white hover:bg-amber-600">
               Continue shopping
             </Link>
           </div>
@@ -502,7 +536,7 @@ export default function CheckoutPage() {
     <div className="flex min-h-screen flex-col bg-slate-50">
       <SecurityOverlay show={showOverlay} onMinTimeElapsed={() => setMinTimePassed(true)} />
       <TransactionFailedOverlay open={failedOverlay} reason={failedReason} onClose={() => setFailedOverlay(false)} />
-      <FraudDetectedModal open={fraudDetected} redirectIn={fraudCountdown} />
+      <FraudDetectedModal open={fraudDetected} redirectIn={fraudCountdown} scamDetected={scamDetected} />
       <OtpModal
         open={otpModalOpen}
         demoOtp={demoOtp}

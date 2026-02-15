@@ -23,8 +23,8 @@ export default function ProductDetailPage() {
         <main className="flex flex-1 items-center justify-center px-4">
           <div className="text-center">
             <p className="text-slate-600">Product not found.</p>
-            <Link href="/products" className="mt-2 inline-block text-emerald-600 hover:underline">
-              Back to products
+            <Link href="/shop" className="mt-2 inline-block text-blue-600 hover:underline">
+              Back to shop
             </Link>
           </div>
         </main>
@@ -36,16 +36,17 @@ export default function ProductDetailPage() {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
       <Navbar />
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
-        <nav className="mb-6 text-sm text-slate-500">
-          <Link href="/" className="hover:text-slate-700">Home</Link>
-          <span className="mx-2">/</span>
-          <Link href="/products" className="hover:text-slate-700">Products</Link>
-          <span className="mx-2">/</span>
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <nav className="mb-6 flex items-center gap-2 text-sm text-slate-500">
+          <Link href="/shop" className="hover:text-slate-700">
+            Shop
+          </Link>
+          <span>/</span>
           <span className="text-slate-900">{product.name}</span>
         </nav>
-        <div className="grid gap-8 lg:grid-cols-2">
-          <div className="relative aspect-square overflow-hidden rounded-2xl bg-white shadow-md">
+
+        <div className="grid gap-8 rounded-xl bg-white p-6 shadow-sm lg:grid-cols-2 lg:p-8">
+          <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-100">
             <ProductImage
               src={product.image}
               alt={product.name}
@@ -56,26 +57,29 @@ export default function ProductDetailPage() {
               priority
             />
           </div>
+
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">{product.name}</h1>
+            <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">
+              {product.name}
+            </h1>
             <p className="mt-4 text-2xl font-bold text-slate-900">
               {t("rupee")}{product.price.toLocaleString("en-IN")}
             </p>
-            <p className="mt-4 text-slate-600">{product.description}</p>
-            <div className="mt-8 flex gap-4">
+            <p className="mt-4 text-slate-600 leading-relaxed">{product.description}</p>
+            <div className="mt-8 flex flex-wrap gap-4">
               <button
                 type="button"
                 onClick={() => {
                   addToCart(product);
                   router.push("/cart");
                 }}
-                className="rounded-xl bg-slate-900 px-8 py-3 text-base font-semibold text-white shadow-lg hover:bg-slate-800"
+                className="rounded-lg bg-blue-600 px-8 py-3 font-semibold text-white shadow-sm hover:bg-blue-700"
               >
                 {t("addToCart")}
               </button>
               <Link
                 href="/cart"
-                className="rounded-xl border border-slate-300 bg-white px-8 py-3 text-base font-semibold text-slate-700 hover:bg-slate-50"
+                className="rounded-lg border border-slate-300 bg-white px-8 py-3 font-semibold text-slate-700 hover:bg-slate-50"
               >
                 {t("nav.cart")}
               </Link>

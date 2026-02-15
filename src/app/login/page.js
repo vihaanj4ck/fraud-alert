@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SecurityOverlay from "@/components/SecurityOverlay";
+import { useAuth } from "@/context/AuthContext";
 
 const DEVICE_ID_KEY = "trusthive_device_id";
 
@@ -44,6 +46,8 @@ function LoginRiskBadge({ score }) {
 }
 
 export default function LoginPage() {
+  const router = useRouter();
+  const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [deviceId, setDeviceId] = useState("");
@@ -89,12 +93,13 @@ export default function LoginPage() {
 
         setLoginResult({
           token: data.token,
+          user: data.user,
           loginRiskScore: data.loginRiskScore ?? 0,
           triggeredSignals: data.triggeredSignals || [],
         });
 
-        if (data.token && typeof window !== "undefined") {
-          localStorage.setItem("trusthive_token", data.token);
+        if (data.token) {
+          await login(data.token, data.user);
         }
       } catch (err) {
         setLoginResult({ error: err.message || "Login failed" });
@@ -102,7 +107,7 @@ export default function LoginPage() {
         setMinTimePassed(false);
       }
     },
-    [email, password, deviceId]
+    [email, password, deviceId, login]
   );
 
   const onMinTimeElapsed = useCallback(() => {
@@ -138,7 +143,7 @@ export default function LoginPage() {
               </div>
             )}
             <Link
-              href="/"
+              href="/shop"
               className="inline-block rounded-lg bg-slate-900 px-6 py-2 text-white hover:bg-slate-800"
             >
               Continue to shop

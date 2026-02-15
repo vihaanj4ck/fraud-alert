@@ -1,7 +1,23 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
+import { UAParser } from "ua-parser-js";
 import { getUsersCollection } from "@/lib/mongodb";
 import { getClientIpFromRequest, createToken } from "@/lib/auth";
+
+function parseUserAgent(userAgent) {
+  if (!userAgent || typeof userAgent !== "string") {
+    return { deviceModel: "Unknown", os: "Unknown" };
+  }
+  try {
+    const parser = new UAParser(userAgent);
+    const device = parser.getDevice();
+    const os = parser.getOS().name || "Unknown";
+    const deviceModel = device?.model || device?.type || "Desktop";
+    return { deviceModel, os };
+  } catch {
+    return { deviceModel: "Unknown", os: "Unknown" };
+  }
+}
 
 const RAPID_LOGIN_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -57,6 +73,8 @@ export async function POST(request) {
     }
 
     const currentIP = getClientIpFromRequest(request);
+    const userAgent = request.headers.get("user-agent") || "";
+    const { deviceModel, os } = parseUserAgent(userAgent);
 
     const collection = await getUsersCollection();
     const user = await collection.findOne({ email });
@@ -64,6 +82,13 @@ export async function POST(request) {
       return NextResponse.json(
         { error: "Invalid email or password." },
         { status: 401 }
+      );
+    }
+
+    if (user.accountStatus === "BANNED") {
+      return NextResponse.json(
+        { error: "Your account has been banned due to suspicious activity." },
+        { status: 403 }
       );
     }
 
@@ -77,6 +102,13 @@ export async function POST(request) {
 
     const { risk, triggeredSignals } = computeLoginRisk(user, currentIP, deviceId);
 
+    const ipLogEntry = {
+      ip: currentIP || "",
+      deviceModel: deviceModel || "Unknown",
+      os: os || "Unknown",
+      timestamp: new Date(),
+    };
+
     const updateOp = {
       $set: {
         lastLoginIP: currentIP || null,
@@ -88,6 +120,7 @@ export async function POST(request) {
           deviceId: deviceId || "",
           timestamp: new Date(),
         },
+        ipLogs: { $each: [ipLogEntry], $slice: -100 },
       },
     };
     if (risk > 60) {
@@ -100,6 +133,7 @@ export async function POST(request) {
 
     return NextResponse.json({
       token,
+      user: { email: user.email, name: user.name || user.email?.split("@")[0] || "User" },
       loginRiskScore: risk,
       triggeredSignals: triggeredSignals || [],
     });

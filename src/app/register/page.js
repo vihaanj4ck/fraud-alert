@@ -6,6 +6,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 
 export default function RegisterPage() {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [success, setSuccess] = useState(false);
@@ -21,16 +22,30 @@ export default function RegisterPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          name: name.trim(),
           email: email.trim().toLowerCase(),
           password,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Registration failed.");
+
+      if (res.ok) {
+        await res.json();
+        setSuccess(true);
         return;
       }
-      setSuccess(true);
+
+      const text = await res.text();
+      console.error(`Registration failed (${res.status}):`, text);
+
+      let errorMessage = "Registration failed.";
+      try {
+        const data = JSON.parse(text);
+        errorMessage = data.error || errorMessage;
+      } catch {
+        errorMessage = "Registration failed. Check console for details.";
+      }
+
+      setError(errorMessage);
     } catch (err) {
       setError(err.message || "Registration failed.");
     } finally {
@@ -75,6 +90,16 @@ export default function RegisterPage() {
           {error && (
             <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
           )}
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Full Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-4 py-2 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              placeholder="John Doe"
+            />
+          </div>
           <div>
             <label className="block text-sm font-medium text-slate-700">Email</label>
             <input

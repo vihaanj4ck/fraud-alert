@@ -20,8 +20,8 @@ export default function CartPage() {
           <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-12 text-center shadow-sm">
             <p className="text-slate-600">{t("cart.empty")}</p>
             <Link
-              href="/products"
-              className="mt-4 inline-block rounded-lg bg-slate-900 px-6 py-2 text-white hover:bg-slate-800"
+              href="/shop"
+              className="mt-4 inline-block rounded-lg bg-amber-500 px-6 py-2 text-white hover:bg-amber-600"
             >
               {t("nav.products")}
             </Link>
@@ -88,7 +88,7 @@ export default function CartPage() {
                 </div>
                 <Link
                   href="/checkout"
-                  className="mt-5 block w-full rounded-xl bg-slate-900 py-3.5 text-center font-semibold text-white hover:bg-emerald-700 transition-colors shadow-md hover:shadow-lg"
+                  className="mt-5 block w-full rounded-xl bg-amber-500 py-3.5 text-center font-semibold text-white hover:bg-amber-600 transition-colors shadow-md hover:shadow-lg"
                 >
                   {t("cart.proceedToCheckout")}
                 </Link>

@@ -23,7 +23,7 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/products" className="text-sm text-slate-600 hover:text-slate-900">
+                <Link href="/shop" className="text-sm text-slate-600 hover:text-slate-900">
                   {t("nav.products")}
                 </Link>
               </li>

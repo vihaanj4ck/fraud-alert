@@ -1,66 +1,112 @@
 import { NextResponse } from "next/server";
+import { UAParser } from "ua-parser-js";
 import { getClientIpFromRequest } from "@/lib/auth";
-import { getIpLogsCollection } from "@/lib/mongodb";
+import { getIpLogsCollection, getUsersCollection } from "@/lib/mongodb";
 
-const WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-const MAX_DISTINCT_IPS = 2;
+const WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_DISTINCT_IP_DEVICE = 3;
+
+/**
+ * Parse User-Agent for browser name, OS, and device model.
+ */
+function parseUserAgent(userAgent) {
+  if (!userAgent || typeof userAgent !== "string") {
+    return { browser: "Unknown", os: "Unknown", deviceModel: "Unknown" };
+  }
+  try {
+    const parser = new UAParser(userAgent);
+    const browser = parser.getBrowser().name || "Unknown";
+    const os = parser.getOS().name || "Unknown";
+    const device = parser.getDevice();
+    const deviceModel = device.model || device.type || "Desktop";
+    return { browser, os, deviceModel };
+  } catch {
+    return { browser: "Unknown", os: "Unknown", deviceModel: "Unknown" };
+  }
+}
 
 /**
  * POST /api/ip/log
- * Body: { accountId: string } (e.g. email, or "guest")
- * Logs client IP for this account. If > MAX_DISTINCT_IPS distinct IPs in last 5 min, flags HIGH RISK and bans account.
+ * Body: { userId?: string, accountId?: string } - userId for logged-in, accountId for guest
+ * Headers: User-Agent (parsed for browser, OS, device)
+ * If >3 distinct IP+Device combos in last 10 min for this user, set accountStatus=BANNED.
  */
 export async function POST(request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const accountId = (body.accountId || "guest").toString().trim() || "guest";
+    const userId = (body.userId || body.accountId || "guest").toString().trim() || "guest";
     const clientIp = getClientIpFromRequest(request) || request.headers.get("x-real-ip") || "unknown";
+    const userAgent = request.headers.get("user-agent") || "";
+    const { browser, os, deviceModel } = parseUserAgent(userAgent);
+
+    const deviceCombo = `${browser}|${os}|${deviceModel}`;
 
     const coll = await getIpLogsCollection();
     const now = new Date();
     const windowStart = new Date(now.getTime() - WINDOW_MS);
 
-    // Check if already banned
-    const existingBan = await coll.findOne({ accountId, type: "ban" });
-    if (existingBan) {
-      return NextResponse.json({
-        ok: false,
-        banned: true,
-        highRisk: true,
-        error: "ACCOUNT BANNED: Too many IP addresses detected.",
-      });
+    // Check if user is already banned in users collection
+    if (userId !== "guest") {
+      const usersColl = await getUsersCollection();
+      const user = await usersColl.findOne({ email: userId });
+      if (user?.accountStatus === "BANNED") {
+        return NextResponse.json({
+          ok: false,
+          banned: true,
+          highRisk: true,
+          error: "ACCOUNT BANNED: Suspicious activity detected.",
+        });
+      }
     }
 
-    // Log this IP attempt
+    // Log this attempt with full device fingerprint
     await coll.insertOne({
-      accountId,
+      userId,
       ip: clientIp,
+      browser,
+      os,
+      deviceModel,
+      deviceCombo,
       type: "log",
       createdAt: now,
     });
 
-    // Count distinct IPs for this account in the last 5 minutes
-    const distinctIps = await coll
+    // Count distinct IP+Device combinations for this user in last 10 minutes
+    const distinctCombos = await coll
       .aggregate([
-        { $match: { accountId, type: "log", createdAt: { $gte: windowStart } } },
-        { $group: { _id: "$ip" } },
+        { $match: { userId, type: "log", createdAt: { $gte: windowStart } } },
+        { $group: { _id: { ip: "$ip", deviceCombo: "$deviceCombo" } } },
         { $count: "total" },
       ])
       .toArray();
-    const distinctCount = distinctIps[0]?.total ?? 0;
+    const distinctCount = distinctCombos[0]?.total ?? 0;
 
-    if (distinctCount > MAX_DISTINCT_IPS) {
+    if (distinctCount > MAX_DISTINCT_IP_DEVICE && userId !== "guest") {
+      const usersColl = await getUsersCollection();
+      await usersColl.updateOne(
+        { email: userId },
+        { $set: { accountStatus: "BANNED", bannedAt: now } }
+      );
       await coll.insertOne({
-        accountId,
+        userId,
         type: "ban",
+        reason: `More than ${MAX_DISTINCT_IP_DEVICE} distinct IP+Device combinations within 10 minutes`,
         createdAt: now,
-        reason: "More than 2 distinct IPs within 5 minutes",
       });
       return NextResponse.json({
         ok: false,
         banned: true,
         highRisk: true,
-        error: "ACCOUNT BANNED: Too many IP addresses detected.",
+        error: "ACCOUNT BANNED: Too many IP/device combinations detected.",
+      });
+    }
+
+    if (distinctCount > MAX_DISTINCT_IP_DEVICE) {
+      return NextResponse.json({
+        ok: false,
+        banned: true,
+        highRisk: true,
+        error: "Suspicious activity: Too many IP/device combinations.",
       });
     }
 

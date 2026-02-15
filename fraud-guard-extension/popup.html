@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fraud Guard</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <div class="glass-card">
+      <div class="header">
+        <h1>Fraud Guard</h1>
+        <p class="tagline">AI-Powered Site Scanner</p>
+      </div>
+
+      <div class="url-display" id="urlDisplay">
+        <span class="url-placeholder">No site loaded</span>
+      </div>
+
+      <button class="scan-btn" id="scanBtn">
+        <span class="btn-icon">🛡️</span>
+        <span class="btn-text">Scan Site</span>
+      </button>
+
+      <div class="score-section" id="scoreSection">
+        <div class="circular-progress" id="circularProgress">
+          <svg viewBox="0 0 120 120">
+            <circle class="track" cx="60" cy="60" r="54" />
+            <circle class="fill" cx="60" cy="60" r="54" id="progressCircle" />
+          </svg>
+          <div class="score-label">
+            <span class="score-value" id="scoreValue">--</span>
+            <span class="score-unit">%</span>
+          </div>
+        </div>
+        <p class="score-title">Confidence Level</p>
+        <p class="score-status" id="scoreStatus"></p>
+        <div class="detection-details" id="detectionDetails">
+          <p class="detection-details-title">Risk Factors</p>
+          <ul class="detection-details-list" id="detectionDetailsList"></ul>
+        </div>
+      </div>
+
+      <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p>Analyzing URL...</p>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

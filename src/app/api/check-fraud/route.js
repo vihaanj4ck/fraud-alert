@@ -21,6 +21,7 @@ const KNOWN_CITIES = [
 
 const VELOCITY_THRESHOLD_MS = 15 * 1000; // 15 seconds
 const BLOCK_THRESHOLD = 60;
+const SCAM_DETECTED_THRESHOLD = 70; // AI risk + Velocity risk > 70% = Scam Detected
 
 const TRUSTED_EMAIL_DOMAINS = [
   "gmail.com",
@@ -230,7 +231,7 @@ async function getAiCartRisk(productNames) {
     const unrelatedScore = idx >= 0 ? scores[idx] || 0 : 0;
     const anomalous = unrelatedScore > 0.5;
     return {
-      risk: anomalous ? 20 : 0,
+      risk: anomalous ? 50 : 0, // Higher weight so AI+Velocity can exceed 70%
       label: anomalous ? "unrelated or anomalous mix" : "coherent related products",
       score: unrelatedScore,
     };
@@ -331,10 +332,15 @@ export async function POST(request) {
     100,
     cartQuantityRisk + velocityRisk + geo.risk + ai.risk + mobilePattern.risk + emailDomain.risk + cardPattern.risk
   );
-  const status = finalScore > BLOCK_THRESHOLD ? "Blocked" : "Allowed";
+  const aiPlusVelocity = ai.risk + velocityRisk;
+  const scamDetected = aiPlusVelocity > SCAM_DETECTED_THRESHOLD;
+  const blockedByTotal = finalScore > BLOCK_THRESHOLD;
+  const status = scamDetected || blockedByTotal ? "Blocked" : "Allowed";
   const reasoning =
     status === "Blocked"
-      ? "High Security Risk. Transaction blocked by behavioral fraud engine."
+      ? scamDetected
+        ? "Scam Detected: AI analysis and velocity patterns indicate high fraud risk."
+        : "High Security Risk. Transaction blocked by behavioral fraud engine."
       : `Cumulative risk ${finalScore}%. Below block threshold (${BLOCK_THRESHOLD}%).`;
 
   const riskBreakdown = {
@@ -379,7 +385,8 @@ export async function POST(request) {
     return NextResponse.json({
       finalScore,
       status: "Blocked",
-      reason: "High Security Risk",
+      reason: scamDetected ? "Scam Detected" : "High Security Risk",
+      scamDetected: !!scamDetected,
       reasoning,
       triggeredSignals,
       riskBreakdown,

@@ -1,0 +1,321 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 340px;
+  min-height: 420px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+  background-attachment: fixed;
+}
+
+.container {
+  padding: 20px;
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 24px;
+  padding: 28px 24px;
+  width: 100%;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.url-display {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.url-display .url-placeholder,
+.url-display .url-text {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.95);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.url-display .url-placeholder {
+  opacity: 0.8;
+  font-style: italic;
+}
+
+.scan-btn {
+  width: 100%;
+  padding: 18px 24px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #5a3d9e;
+  background: linear-gradient(180deg, #fff 0%, #f0f0f0 100%);
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: transform 0.2s, box-shadow 0.2s;
+  margin-bottom: 24px;
+}
+
+.scan-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+}
+
+.scan-btn:active {
+  transform: translateY(0);
+}
+
+.scan-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-icon {
+  font-size: 1.3rem;
+}
+
+.score-section {
+  text-align: center;
+  display: none;
+}
+
+.score-section.visible {
+  display: block;
+}
+
+.circular-progress {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  margin: 0 auto 12px;
+}
+
+.circular-progress svg {
+  transform: rotate(-90deg);
+  width: 100%;
+  height: 100%;
+}
+
+.circular-progress .track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.3);
+  stroke-width: 10;
+}
+
+.circular-progress .fill {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 10;
+  stroke-linecap: round;
+  stroke-dasharray: 339.292;
+  stroke-dashoffset: 339.292;
+  transition: stroke-dashoffset 0.8s ease-out, stroke 0.3s;
+}
+
+.circular-progress .fill.safe {
+  stroke: #22c55e;
+}
+
+.circular-progress .fill.warning {
+  stroke: #f97316;
+}
+
+.circular-progress .fill.danger {
+  stroke: #ef4444;
+}
+
+/* Theme variants for card based on score */
+.glass-card.theme-secure {
+  border-color: rgba(34, 197, 94, 0.4);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 0 1px rgba(34, 197, 94, 0.2);
+}
+
+.glass-card.theme-suspicious {
+  border-color: rgba(249, 115, 22, 0.5);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 0 0 1px rgba(249, 115, 22, 0.3);
+}
+
+.glass-card.theme-danger {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 0 0 1px rgba(239, 68, 68, 0.4);
+}
+
+.glass-card.theme-danger .score-value,
+.glass-card.theme-danger .score-status {
+  color: #fca5a5;
+}
+
+.glass-card.theme-suspicious .score-value,
+.glass-card.theme-suspicious .score-status {
+  color: #fdba74;
+}
+
+.glass-card.theme-secure .score-value,
+.glass-card.theme-secure .score-status {
+  color: #86efac;
+}
+
+.score-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+}
+
+.score-value {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  line-height: 1;
+}
+
+.score-unit {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  margin-top: 2px;
+}
+
+.score-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  margin-bottom: 4px;
+}
+
+.score-status {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.detection-details {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  width: 100%;
+  text-align: left;
+}
+
+.detection-details-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 8px;
+}
+
+.detection-details-list {
+  list-style: none;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.95);
+  line-height: 1.5;
+}
+
+.detection-details-item {
+  padding: 4px 0;
+  padding-left: 16px;
+  position: relative;
+}
+
+.detection-details-item::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.detection-details-item.none {
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+}
+
+.loading {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 0;
+}
+
+.loading.visible {
+  display: flex;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.loading p {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 500;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
