@@ -35,26 +35,25 @@ function isConnectionError(err) {
 
 const rawUri = process.env.MONGODB_URI;
 const uri = rawUri && typeof rawUri === "string" ? rawUri.trim() : "";
+const isValidUri =
+  uri &&
+  (uri.toLowerCase().startsWith("mongodb+srv://") || uri.toLowerCase().startsWith("mongodb://"));
 
-if (!uri || !uri.toLowerCase().startsWith("mongodb+srv://")) {
-  throw new Error(
-    "[mongodb] MONGODB_URI must be set and must use mongodb+srv:// scheme. " +
-      "Current value: " + maskUriPassword(rawUri || "")
-  );
-}
-
+// Defer production validation to connectToDatabase() so the module can load at build time (e.g. Vercel).
 console.log("[mongodb] MONGODB_URI:", maskUriPassword(uri));
 
-const client = new MongoClient(uri, options);
+let client = null;
+let clientPromise = null;
 
-// Single global promise; in dev reuse to avoid multiple connections
-let clientPromise;
-if (process.env.NODE_ENV === "development" && global._mongoClientPromise) {
-  clientPromise = global._mongoClientPromise;
-} else {
-  clientPromise = client.connect();
-  if (process.env.NODE_ENV === "development") {
-    global._mongoClientPromise = clientPromise;
+if (uri && isValidUri) {
+  client = new MongoClient(uri, options);
+  if (process.env.NODE_ENV === "development" && global._mongoClientPromise) {
+    clientPromise = global._mongoClientPromise;
+  } else {
+    clientPromise = client.connect();
+    if (process.env.NODE_ENV === "development") {
+      global._mongoClientPromise = clientPromise;
+    }
   }
 }
 
@@ -66,6 +65,15 @@ export default clientPromise;
  * @returns {Promise<import("mongodb").MongoClient>}
  */
 export async function connectToDatabase() {
+  if (process.env.NODE_ENV === "production" && (!uri || !isValidUri)) {
+    throw new Error(
+      "[mongodb] MONGODB_URI must be set and must use mongodb+srv:// or mongodb:// scheme. " +
+        "Current value: " + maskUriPassword(rawUri || "")
+    );
+  }
+  if (!clientPromise) {
+    throw new Error("[mongodb] MONGODB_URI is not set or invalid. Set MONGODB_URI in your environment.");
+  }
   const c = await clientPromise;
   await c.db("admin").command({ ping: 1 });
   return c;
