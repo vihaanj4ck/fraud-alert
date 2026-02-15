@@ -4,7 +4,6 @@ dns.setServers(['8.8.8.8', '8.8.4.4']);
 
 import { MongoClient } from 'mongodb';
 
-const uri = process.env.MONGODB_URI;
 const options = {
   connectTimeoutMS: 10000,
   socketTimeoutMS: 45000,
@@ -13,19 +12,22 @@ const options = {
 let client;
 let clientPromise;
 
-if (!process.env.MONGODB_URI) {
-  throw new Error('Please add your Mongo URI to .env.local');
-}
-
-if (process.env.NODE_ENV === 'development') {
-  if (!global._mongoClientPromise) {
+try {
+  const uri = process.env.MONGODB_URI;
+  if (!uri || uri.trim() === '') {
+    clientPromise = Promise.reject(new Error('Please add your Mongo URI to .env.local'));
+  } else if (process.env.NODE_ENV === 'development') {
+    if (!global._mongoClientPromise) {
+      client = new MongoClient(uri, options);
+      global._mongoClientPromise = client.connect();
+    }
+    clientPromise = global._mongoClientPromise;
+  } else {
     client = new MongoClient(uri, options);
-    global._mongoClientPromise = client.connect();
+    clientPromise = client.connect();
   }
-  clientPromise = global._mongoClientPromise;
-} else {
-  client = new MongoClient(uri, options);
-  clientPromise = client.connect();
+} catch (err) {
+  clientPromise = Promise.reject(err);
 }
 
 export default clientPromise;
