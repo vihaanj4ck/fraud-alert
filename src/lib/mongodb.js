@@ -12,20 +12,22 @@ const options = {
 let client;
 let clientPromise;
 
-// Only initialize MongoClient when MONGODB_URI exists (prevents build crash when var is injected at runtime)
+// Only initialize MongoClient when MONGODB_URI exists and is a valid MongoDB URI (prevents MongoParseError at build)
 const uri = process.env.MONGODB_URI;
-if (!uri || typeof uri !== 'string' || uri.trim() === '') {
-  clientPromise = Promise.reject(new Error('Please add your Mongo URI to .env.local'));
+const isValidUri = uri && typeof uri === 'string' && uri.trim() !== '' && uri.trim().toLowerCase().startsWith('mongodb');
+if (!isValidUri) {
+  clientPromise = Promise.reject(new Error('Please add a valid MongoDB URI (must start with mongodb:// or mongodb+srv://) to .env.local'));
 } else {
+  const uriTrimmed = uri.trim();
   try {
     if (process.env.NODE_ENV === 'development') {
       if (!global._mongoClientPromise) {
-        client = new MongoClient(uri, options);
+        client = new MongoClient(uriTrimmed, options);
         global._mongoClientPromise = client.connect();
       }
       clientPromise = global._mongoClientPromise;
     } else {
-      client = new MongoClient(uri, options);
+      client = new MongoClient(uriTrimmed, options);
       clientPromise = client.connect();
     }
   } catch (err) {
