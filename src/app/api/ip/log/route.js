@@ -4,32 +4,40 @@ import { getClientIpFromRequest } from "@/lib/auth";
 import { getIpLogsCollection, getUsersCollection } from "@/lib/mongodb";
 
 const WINDOW_MS = 10 * 60 * 1000; // 10 minutes
-const MAX_DISTINCT_IP_DEVICE = 3;
+const MAX_DISTINCT_DEVICES = 3;
 
 /**
- * Parse User-Agent for browser name, OS, and device model.
+ * Parse User-Agent for browser name and OS (for server-side fallback when deviceHash not sent).
  */
 function parseUserAgent(userAgent) {
   if (!userAgent || typeof userAgent !== "string") {
-    return { browser: "Unknown", os: "Unknown", deviceModel: "Unknown" };
+    return { browser: "Unknown", os: "Unknown" };
   }
   try {
     const parser = new UAParser(userAgent);
     const browser = parser.getBrowser().name || "Unknown";
     const os = parser.getOS().name || "Unknown";
-    const device = parser.getDevice();
-    const deviceModel = device.model || device.type || "Desktop";
-    return { browser, os, deviceModel };
+    return { browser, os };
   } catch {
-    return { browser: "Unknown", os: "Unknown", deviceModel: "Unknown" };
+    return { browser: "Unknown", os: "Unknown" };
   }
 }
 
 /**
+ * Build DeviceHash from IP + browser + OS.
+ */
+function buildDeviceHash(ip, browser, os) {
+  const safe = (s) => (s != null && typeof s === "string" ? s.trim() : "") || "unknown";
+  return `${safe(ip)}|${safe(browser)}|${safe(os)}`;
+}
+
+/**
  * POST /api/ip/log
- * Body: { userId?: string, accountId?: string } - userId for logged-in, accountId for guest
- * Headers: User-Agent (parsed for browser, OS, device)
- * If >3 distinct IP+Device combos in last 10 min for this user, set accountStatus=BANNED.
+ * Body: { userId?: string, accountId?: string, deviceHash?: string }
+ * - If client sends deviceHash (IP|Browser|OS), use it for velocity check.
+ * - Otherwise build deviceHash from request IP + User-Agent.
+ * Logs UserID, DeviceHash, Timestamp to ip_logs.
+ * If count(distinct DeviceHash) for this UserID in last 10 min > 3, set user accountStatus = BANNED.
  */
 export async function POST(request) {
   try {
@@ -37,15 +45,17 @@ export async function POST(request) {
     const userId = (body.userId || body.accountId || "guest").toString().trim() || "guest";
     const clientIp = getClientIpFromRequest(request) || request.headers.get("x-real-ip") || "unknown";
     const userAgent = request.headers.get("user-agent") || "";
-    const { browser, os, deviceModel } = parseUserAgent(userAgent);
+    const { browser, os } = parseUserAgent(userAgent);
 
-    const deviceCombo = `${browser}|${os}|${deviceModel}`;
+    let deviceHash = typeof body.deviceHash === "string" ? body.deviceHash.trim() : "";
+    if (!deviceHash) {
+      deviceHash = buildDeviceHash(clientIp, browser, os);
+    }
 
     const coll = await getIpLogsCollection();
     const now = new Date();
     const windowStart = new Date(now.getTime() - WINDOW_MS);
 
-    // Check if user is already banned in users collection
     if (userId !== "guest") {
       const usersColl = await getUsersCollection();
       const user = await usersColl.findOne({ email: userId });
@@ -59,29 +69,26 @@ export async function POST(request) {
       }
     }
 
-    // Log this attempt with full device fingerprint
     await coll.insertOne({
       userId,
+      deviceHash,
       ip: clientIp,
       browser,
       os,
-      deviceModel,
-      deviceCombo,
       type: "log",
       createdAt: now,
     });
 
-    // Count distinct IP+Device combinations for this user in last 10 minutes
-    const distinctCombos = await coll
+    const distinctDevices = await coll
       .aggregate([
         { $match: { userId, type: "log", createdAt: { $gte: windowStart } } },
-        { $group: { _id: { ip: "$ip", deviceCombo: "$deviceCombo" } } },
+        { $group: { _id: "$deviceHash" } },
         { $count: "total" },
       ])
       .toArray();
-    const distinctCount = distinctCombos[0]?.total ?? 0;
+    const distinctCount = distinctDevices[0]?.total ?? 0;
 
-    if (distinctCount > MAX_DISTINCT_IP_DEVICE && userId !== "guest") {
+    if (distinctCount > MAX_DISTINCT_DEVICES && userId !== "guest") {
       const usersColl = await getUsersCollection();
       await usersColl.updateOne(
         { email: userId },
@@ -90,23 +97,23 @@ export async function POST(request) {
       await coll.insertOne({
         userId,
         type: "ban",
-        reason: `More than ${MAX_DISTINCT_IP_DEVICE} distinct IP+Device combinations within 10 minutes`,
+        reason: "More than 3 unique devices (DeviceHash) within 10 minutes",
         createdAt: now,
       });
       return NextResponse.json({
         ok: false,
         banned: true,
         highRisk: true,
-        error: "ACCOUNT BANNED: Too many IP/device combinations detected.",
+        error: "ACCOUNT BANNED: 3+ unique devices detected in under 10 minutes.",
       });
     }
 
-    if (distinctCount > MAX_DISTINCT_IP_DEVICE) {
+    if (distinctCount > MAX_DISTINCT_DEVICES) {
       return NextResponse.json({
         ok: false,
         banned: true,
         highRisk: true,
-        error: "Suspicious activity: Too many IP/device combinations.",
+        error: "Suspicious activity: Too many unique devices.",
       });
     }
 

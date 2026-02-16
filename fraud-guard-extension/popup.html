@@ -18,6 +18,11 @@
         <span class="url-placeholder">No site loaded</span>
       </div>
 
+      <div class="protocol-status" id="protocolStatus" aria-hidden="true">
+        <span class="protocol-icon" id="protocolIcon" title="Protocol"></span>
+        <span class="protocol-label" id="protocolLabel">Protocol</span>
+      </div>
+
       <button class="scan-btn" id="scanBtn">
         <span class="btn-icon">🛡️</span>
         <span class="btn-text">Scan Site</span>
@@ -34,17 +39,18 @@
             <span class="score-unit">%</span>
           </div>
         </div>
-        <p class="score-title">Confidence Level</p>
+        <p class="score-title">Safety Score</p>
         <p class="score-status" id="scoreStatus"></p>
+        <div class="score-gradient-bar" title="Red = risky, Green = safe"></div>
         <div class="detection-details" id="detectionDetails">
-          <p class="detection-details-title">Risk Factors</p>
+          <p class="detection-details-title">AI Insights</p>
           <ul class="detection-details-list" id="detectionDetailsList"></ul>
         </div>
       </div>
 
       <div class="loading" id="loading">
         <div class="spinner"></div>
-        <p>Analyzing URL...</p>
+        <p>Analyzing Site Context...</p>
       </div>
     </div>
   </div>

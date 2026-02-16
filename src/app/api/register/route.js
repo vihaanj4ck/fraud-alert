@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { connectToDatabase, getUsersCollection } from "@/lib/mongodb";
+import { connectToDatabase, getUsersCollection, getBlockedAttemptsCollection } from "@/lib/mongodb";
+import { checkMalicious } from "@/lib/blocklist";
 
 export async function POST(request) {
   try {
@@ -21,6 +22,23 @@ export async function POST(request) {
       return NextResponse.json(
         { error: "Password must be at least 6 characters." },
         { status: 400 }
+      );
+    }
+
+    if (checkMalicious(email)) {
+      try {
+        const blockedCol = await getBlockedAttemptsCollection();
+        await blockedCol.insertOne({
+          type: "registration",
+          email,
+          timestamp: new Date(),
+        });
+      } catch (logErr) {
+        console.error("[register] blocked_attempts log failed:", logErr?.message);
+      }
+      return NextResponse.json(
+        { error: "Security Alert: This email is flagged in our global fraud database." },
+        { status: 403 }
       );
     }
 

@@ -1,89 +1,65 @@
-// Background: analyze URL, collect page data, send to /api/scan-url
-const API_BASE = "http://localhost:3000";
+// Background: extract page data via executeScript for reasoning-based security engine
+// Production: set to your live Vercel URL with https:// (e.g. https://your-app.vercel.app)
+// Fetch URL used: ${API_BASE_URL}/api/scan-url
+const API_BASE_URL = "https://your-app.vercel.app";
 
-function analyzeUrl(url) {
-  if (!url || typeof url !== "string") {
-    return { dots: 0, length: 0, hasAt: false, longOrManyDots: false };
-  }
-  const trimmed = url.trim();
-  const dots = (trimmed.match(/\./g) || []).length;
-  const length = trimmed.length;
-  const hasAt = trimmed.includes("@");
-  const longOrManyDots = length > 75 || dots > 3;
-  return { dots, length, hasAt, longOrManyDots };
-}
+/**
+ * Injected into the tab. Extracts:
+ * - Full URL, Page Title
+ * - meta description, og:title
+ * - Count of <a> tags: total, external domain count, empty (# / javascript:void(0)) count
+ */
+function extractPageData() {
+  const fullUrl = window.location.href || "";
+  const pageTitle = document.title || "";
 
-const EXTRACT_PAGE_SCRIPT = () => {
-  const getPageOrigin = () => {
-    try {
-      return window.location.origin || "";
-    } catch {
-      return "";
-    }
-  };
-  const isExternal = (href, pageOrigin) => {
-    if (!href || typeof href !== "string") return false;
-    try {
-      const u = new URL(href, window.location.href);
-      return u.origin !== pageOrigin;
-    } catch {
-      return false;
-    }
-  };
-  const pageOrigin = getPageOrigin();
-  const meta =
+  const descMeta =
     document.querySelector('meta[name="description"]') ||
     document.querySelector('meta[property="og:description"]');
-  const metaDescription = (meta && meta.getAttribute("content")) || "";
-  const title = document.title || "";
-  const links = document.querySelectorAll("a[href]");
-  let nullLinksCount = 0;
-  links.forEach((a) => {
-    const h = (a.getAttribute("href") || "").trim();
+  const metaDescription = (descMeta && descMeta.getAttribute("content")) || "";
+
+  const ogTitleMeta = document.querySelector('meta[property="og:title"]');
+  const ogTitle = (ogTitleMeta && ogTitleMeta.getAttribute("content")) || "";
+
+  const pageOrigin = window.location.origin || "";
+  let totalLinks = 0;
+  let externalLinks = 0;
+  let emptyLinks = 0;
+
+  const anchors = document.querySelectorAll("a[href]");
+  anchors.forEach((a) => {
+    const href = (a.getAttribute("href") || "").trim();
+    totalLinks += 1;
     if (
-      h === "#" ||
-      h === "" ||
-      h === "javascript:void(0)" ||
-      h === "javascript:;"
-    )
-      nullLinksCount++;
-  });
-  let externalImages = 0,
-    totalImages = 0;
-  for (let i = 0; i < document.images.length; i++) {
-    const src = document.images[i].src;
-    if (!src) continue;
-    totalImages++;
-    if (isExternal(src, pageOrigin)) externalImages++;
-  }
-  let externalScripts = 0,
-    totalScripts = 0;
-  const scriptDomains = {};
-  const scripts = document.querySelectorAll("script[src]");
-  for (let i = 0; i < scripts.length; i++) {
-    const src = scripts[i].src;
-    if (!src) continue;
-    totalScripts++;
+      !href ||
+      href === "#" ||
+      href === "javascript:void(0)" ||
+      href === "javascript:;" ||
+      href.startsWith("javascript:")
+    ) {
+      emptyLinks += 1;
+      return;
+    }
     try {
-      const u = new URL(src, window.location.href);
+      const u = new URL(href, pageOrigin);
       if (u.origin !== pageOrigin) {
-        externalScripts++;
-        scriptDomains[u.hostname] = true;
+        externalLinks += 1;
       }
-    } catch (_) {}
-  }
+    } catch (_) {
+      emptyLinks += 1;
+    }
+  });
+
   return {
-    title,
+    fullUrl,
+    pageTitle,
     metaDescription,
-    nullLinksCount,
-    totalLinks: links.length,
-    externalImages,
-    totalImages,
-    externalScripts,
-    totalScripts,
-    distinctScriptDomains: Object.keys(scriptDomains).length,
+    ogTitle,
+    totalLinks,
+    externalLinks,
+    emptyLinks,
   };
-};
+}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action !== "scanUrl") return;
@@ -100,80 +76,77 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return { success: false, error: "No active tab" };
       }
 
-      if (!url.startsWith("http://") && !url.startsWith("https://")) {
-        return { success: false, error: "Cannot scan this page" };
+      // Only skip pages that cannot be scanned (browser internals / blank)
+      const isUnscannable =
+        url.startsWith("chrome://") ||
+        url === "about:blank" ||
+        url.startsWith("about:blank");
+      if (isUnscannable) {
+        return { success: false, error: "Cannot scan this page (chrome:// or about:blank)" };
       }
 
-      const urlAnalysis = analyzeUrl(url);
+      // Force-scan everything else: http, https, and any TLD (.xyz, .top, etc.)
+      const isSecureProtocol = url.startsWith("https://");
 
       let pageData = {
-        title: "",
+        fullUrl: url,
+        pageTitle: "",
         metaDescription: "",
-        nullLinksCount: 0,
+        ogTitle: "",
         totalLinks: 0,
-        externalImages: 0,
-        totalImages: 0,
-        externalScripts: 0,
-        totalScripts: 0,
-        distinctScriptDomains: 0,
+        externalLinks: 0,
+        emptyLinks: 0,
       };
 
       try {
-        const fromContent = await new Promise((resolve) => {
-          chrome.tabs.sendMessage(tab.id, { action: "getPageData" }, (r) => {
-            if (chrome.runtime.lastError) resolve(null);
-            else resolve(r);
-          });
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: extractPageData,
         });
-        if (fromContent?.success && fromContent.data) {
-          pageData = fromContent.data;
+        if (results?.[0]?.result) {
+          pageData = results[0].result;
         } else {
-          const results = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: EXTRACT_PAGE_SCRIPT,
-          });
-          if (results?.[0]?.result) {
-            pageData = results[0].result;
-          }
+          pageData.fullUrl = url;
         }
       } catch (e) {
-        const results = await chrome.scripting
-          .executeScript({
-            target: { tabId: tab.id },
-            func: EXTRACT_PAGE_SCRIPT,
-          })
-          .catch(() => null);
-        if (results?.[0]?.result) pageData = results[0].result;
+        console.warn("[Fraud Guard] executeScript failed:", e);
+        pageData.fullUrl = url;
       }
 
-      const base = (await chrome.storage.local.get("apiBase")).apiBase || API_BASE;
-      const res = await fetch(`${base}/api/scan-url`, {
+      const apiBase =
+        (await chrome.storage.local.get("apiBase")).apiBase || API_BASE_URL;
+      const res = await fetch(`${apiBase}/api/scan-url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          url,
-          pageTitle: pageData.title,
+          url: pageData.fullUrl,
+          pageTitle: pageData.pageTitle,
           metaDescription: pageData.metaDescription,
-          nullLinksCount: pageData.nullLinksCount,
+          ogTitle: pageData.ogTitle,
           totalLinks: pageData.totalLinks,
-          externalImages: pageData.externalImages,
-          totalImages: pageData.totalImages,
-          externalScripts: pageData.externalScripts,
-          totalScripts: pageData.totalScripts,
-          distinctScriptDomains: pageData.distinctScriptDomains ?? 0,
-          urlDots: urlAnalysis.dots,
-          urlLength: urlAnalysis.length,
-          urlHasAt: urlAnalysis.hasAt,
-          urlLongOrManyDots: urlAnalysis.longOrManyDots,
+          externalLinks: pageData.externalLinks,
+          emptyLinks: pageData.emptyLinks,
+          isSecureProtocol,
         }),
       });
 
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        return {
+          success: false,
+          error: "Server returned invalid response. Check API URL is your live Vercel URL (e.g. https://your-app.vercel.app).",
+        };
+      }
       if (!res.ok) {
-        return { success: false, error: data.error || `Request failed: ${res.status}` };
+        return {
+          success: false,
+          error: data.error || `Request failed: ${res.status}`,
+        };
       }
 
-      return { success: true, url, data };
+      return { success: true, url: pageData.fullUrl, data };
     } catch (err) {
       return { success: false, error: err.message || "Network error" };
     }

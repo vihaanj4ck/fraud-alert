@@ -2,11 +2,15 @@
 
 import { useSearchParams, useRouter } from "next/navigation";
 import { useMemo, useState, Suspense } from "react";
+import { motion } from "framer-motion";
 import { CATEGORIES } from "@/lib/data/categories";
 import { ALL_PRODUCTS } from "@/lib/data/products";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ProductCard from "@/components/ProductCard";
+import LiveSecurityMonitor from "@/components/LiveSecurityMonitor";
+import PromoBanner from "@/components/PromoBanner";
+import CategoryBar from "@/components/CategoryBar";
 import { useLanguage } from "@/context/LanguageContext";
 
 function ShopContent() {
@@ -41,7 +45,17 @@ function ShopContent() {
   };
 
   return (
-    <div className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.25 }}
+      className="space-y-0"
+    >
+      <PromoBanner />
+      <Suspense fallback={null}>
+        <CategoryBar />
+      </Suspense>
+      <div className="space-y-6 px-0 pt-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <h1 className="text-2xl font-bold text-slate-900 lg:text-3xl">
           {t("nav.products")}
@@ -52,58 +66,51 @@ function ShopContent() {
             placeholder={t("search")}
             value={localSearch}
             onChange={(e) => setLocalSearch(e.target.value)}
-            className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-slate-900 shadow-sm transition focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
           />
           <button
             type="submit"
-            className="rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-white shadow-sm hover:bg-blue-700"
+            className="rounded-xl bg-amber-500 px-5 py-2.5 font-medium text-white shadow-sm hover:bg-amber-600"
           >
             Search
           </button>
         </form>
       </div>
 
-      <nav className="flex flex-wrap gap-2 border-b border-slate-200 pb-4">
-        <a
-          href="/shop"
-          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-            !categorySlug
-              ? "bg-blue-600 text-white"
-              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-          }`}
-        >
-          All
-        </a>
-        {CATEGORIES.map((cat) => (
-          <a
-            key={cat.id}
-            href={`/shop?category=${cat.slug}`}
-            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-              categorySlug === cat.slug
-                ? "bg-blue-600 text-white"
-                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-            }`}
-          >
-            {cat.name}
-          </a>
-        ))}
-      </nav>
+      <div className="flex flex-col gap-6 lg:flex-row">
+        <div className="min-w-0 flex-1">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {filtered.map((product, index) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                index={index}
+              />
+            ))}
+          </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-        {filtered.map((product) => (
-          <ProductCard key={product.id} product={product} />
-        ))}
-      </div>
-
-      {filtered.length === 0 && (
-        <div className="rounded-xl border border-slate-200 bg-white py-16 text-center">
-          <p className="text-slate-500">No products match your filters.</p>
-          <a href="/shop" className="mt-2 inline-block text-blue-600 hover:underline">
-            Clear filters
-          </a>
+          {filtered.length === 0 && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="rounded-2xl border border-slate-200 bg-white py-16 text-center"
+            >
+              <p className="text-slate-500">No products match your filters.</p>
+              <a href="/shop" className="mt-2 inline-block text-amber-600 hover:underline">
+                Clear filters
+              </a>
+            </motion.div>
+          )}
         </div>
-      )}
-    </div>
+
+        <div className="shrink-0 lg:w-72">
+          <div className="lg:sticky lg:top-[140px]">
+            <LiveSecurityMonitor />
+          </div>
+        </div>
+      </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -111,7 +118,7 @@ export default function ShopPage() {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
       <Navbar />
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-0 sm:px-6 lg:px-8">
         <Suspense fallback={<div className="h-64 animate-pulse rounded-xl bg-slate-200" />}>
           <ShopContent />
         </Suspense>

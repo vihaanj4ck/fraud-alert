@@ -3,6 +3,7 @@ import "./globals.css";
 import { CartProvider } from "@/context/CartContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthProvider } from "@/context/AuthContext";
+import ScrollProgressBar from "@/components/ScrollProgressBar";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -26,6 +27,7 @@ export default function RootLayout({ children }) {
         <LanguageProvider>
           <AuthProvider>
             <CartProvider>
+              <ScrollProgressBar />
               {children}
             </CartProvider>
           </AuthProvider>

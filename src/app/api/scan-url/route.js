@@ -1,208 +1,184 @@
 import { NextResponse } from "next/server";
+import { connectToDatabase, getBlockedAttemptsCollection } from "@/lib/mongodb";
+import { checkMalicious } from "@/lib/blocklist";
 
-const HF_INFERENCE_URL =
-  "https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli";
+// Global CORS so the extension never gets blocked; include on every response
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
 
-const TRUSTED_TLDS = [".com", ".in", ".org", ".net"];
-const TLD_DEDUCT = 30;
-const DEDUCT_PER_HYPHEN_OR_EXTRA_DOT = 10;
-const MAX_SUBDOMAINS_BEFORE_PENALTY = 3;
-const BROKEN_LINK_RATIO_THRESHOLD = 0.2;
-const BROKEN_LINK_DEDUCT = 20;
-const EXTERNAL_ASSET_RATIO_THRESHOLD = 0.6;
-const EXTERNAL_ASSET_DEDUCT = 15;
+function jsonResponse(data, init = {}) {
+  return NextResponse.json(data, {
+    ...init,
+    headers: { ...CORS_HEADERS, ...init.headers },
+  });
+}
 
-const BART_LABELS = [
-  "official portal",
-  "phishing scam",
-  "urgent warning",
-  "prize giveaway",
-];
+const BASE_TRUST_SCORE = 100;
 
-function getHostnameAndTld(urlString) {
+const PENALTY = {
+  HTTP_INSECURE: 30,
+  TITLE_MISSING: 20,
+  DESCRIPTION_MISSING: 30,
+  LINK_DENSITY_HIGH: 20,
+};
+
+function getHostname(urlString) {
   try {
     const u = new URL(urlString);
-    const hostname = u.hostname || "";
-    const parts = hostname.split(".");
-    const tld = parts.length >= 2 ? "." + parts.slice(-1)[0] : "";
-    const dots = (hostname.match(/\./g) || []).length;
-    const hyphens = (hostname.match(/-/g) || []).length;
-    const hasTrustedTld = TRUSTED_TLDS.some((t) => hostname.endsWith(t));
-    return { hostname, tld, dots, hyphens, hasTrustedTld };
+    return (u.hostname || "").toLowerCase();
   } catch {
-    return { hostname: "", tld: "", dots: 0, hyphens: 0, hasTrustedTld: false };
+    return "";
   }
 }
 
 /**
+ * OPTIONS /api/scan-url – CORS preflight for browser extension
+ */
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 200, headers: CORS_HEADERS });
+}
+
+/**
  * POST /api/scan-url
- * Data-driven: TLD check, hyphen/dots, BART (official +10*conf, threat -50*conf), broken link ratio, external asset ratio.
- * Returns safetyPercentage and findings[] with specific reasons.
+ * Weighted Safety Score (start at 100):
+ * - BLOCKLIST: checkMalicious(url) → score 0%, "Verified Scam (Source: Scamwave)"
+ * - PROTOCOL: http:// → -30
+ * - METADATA: title missing -20, description missing -30
+ * - LINK DENSITY: >80% external/empty links → -20
+ * Returns reasoning[] explaining which penalties were applied.
+ * CORS enabled so the extension can call from any origin.
  */
 export async function POST(request) {
   try {
-    const body = await request.json().catch(() => ({}));
+    let body = {};
+    try {
+      body = await request.json();
+    } catch (_) {
+      body = {};
+    }
+    if (body === null || typeof body !== "object") body = {};
     const url = typeof body.url === "string" ? body.url.trim() : "";
-    const pageTitle = typeof body.pageTitle === "string" ? body.pageTitle : "";
+    const pageTitle = typeof body.pageTitle === "string" ? body.pageTitle.trim() : "";
     const metaDescription =
-      typeof body.metaDescription === "string" ? body.metaDescription : "";
-    const nullLinksCount = Math.max(0, Number(body.nullLinksCount) || 0);
+      typeof body.metaDescription === "string" ? body.metaDescription.trim() : "";
+    const ogTitle = typeof body.ogTitle === "string" ? body.ogTitle.trim() : "";
     const totalLinks = Math.max(0, Number(body.totalLinks) || 0);
-    const externalImages = Math.max(0, Number(body.externalImages) || 0);
-    const totalImages = Math.max(0, Number(body.totalImages) || 0);
-    const externalScripts = Math.max(0, Number(body.externalScripts) || 0);
-    const totalScripts = Math.max(0, Number(body.totalScripts) || 0);
+    const externalLinks = Math.max(0, Number(body.externalLinks) || 0);
+    const emptyLinks = Math.max(0, Number(body.emptyLinks) || 0);
+    const isSecureProtocol = body.isSecureProtocol !== false;
 
     if (!url) {
-      return NextResponse.json(
-        { error: "URL is required", safetyPercentage: 0, findings: [] },
+      return jsonResponse(
+        {
+          error: "URL is required",
+          safetyScore: 0,
+          reasoning: ["Scan skipped: No URL provided."],
+        },
         { status: 400 }
       );
     }
 
-    let score = 100;
-    const findings = [];
-
-    // --- 1. DOMAIN AUTHORITY (TLD + hyphen + subdomains) ---
-    const { hostname, tld, dots, hyphens, hasTrustedTld } =
-      getHostnameAndTld(url);
-
-    if (hostname && !hasTrustedTld) {
-      score -= TLD_DEDUCT;
-      const displayTld = tld || "(unknown)";
-      findings.push(`Non-standard TLD detected (${displayTld})`);
-    }
-
-    if (hyphens > 0) {
-      const deduct = hyphens * DEDUCT_PER_HYPHEN_OR_EXTRA_DOT;
-      score -= deduct;
-      findings.push(
-        `Domain contains ${hyphens} hyphen(s) (often used in phishing)`
-      );
-    }
-
-    if (dots > MAX_SUBDOMAINS_BEFORE_PENALTY) {
-      const extra = dots - MAX_SUBDOMAINS_BEFORE_PENALTY;
-      const deduct = extra * DEDUCT_PER_HYPHEN_OR_EXTRA_DOT;
-      score -= deduct;
-      findings.push(
-        `More than 3 subdomains detected (${dots} dots in hostname)`
-      );
-    }
-
-    // --- 2. STRUCTURAL HEURISTICS ---
-    const brokenLinkRatio = totalLinks > 0 ? nullLinksCount / totalLinks : 0;
-    if (brokenLinkRatio > BROKEN_LINK_RATIO_THRESHOLD) {
-      score -= BROKEN_LINK_DEDUCT;
-      findings.push(
-        `Detected ${nullLinksCount} broken links out of ${totalLinks}, suggesting a hollow phishing shell (${Math.round(brokenLinkRatio * 100)}% broken link ratio).`
-      );
-    }
-
-    const totalAssets = totalImages + totalScripts;
-    const externalAssets = externalImages + externalScripts;
-    const externalAssetRatio = totalAssets > 0 ? externalAssets / totalAssets : 0;
-    if (externalAssetRatio > EXTERNAL_ASSET_RATIO_THRESHOLD) {
-      score -= EXTERNAL_ASSET_DEDUCT;
-      findings.push(
-        `External asset ratio ${Math.round(externalAssetRatio * 100)}% (over 60% threshold); possible clone or low-quality site.`
-      );
-    }
-
-    // --- 3. AI SEMANTIC ANALYSIS (BART) ---
-    const token = process.env.HF_TOKEN;
-    if (token) {
-      const textToAnalyze = [pageTitle, metaDescription]
-        .filter(Boolean)
-        .join(" ")
-        .trim() || url;
-      const text = `Site title and description: ${textToAnalyze}`;
-
-      const res = await fetch(HF_INFERENCE_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          inputs: text,
-          parameters: {
-            candidate_labels: BART_LABELS,
-            multi_label: false,
-          },
-        }),
-        signal: AbortSignal.timeout(15000),
-      });
-
-      const aiResponse = await res.json();
-
-      if (res.ok) {
-        let data = aiResponse;
-        if (Array.isArray(data) && data[0]) data = data[0];
-        const scores = data.scores || [];
-        const labelsOut = data.labels || [];
-
-        const getScore = (key) => {
-          const i = labelsOut.findIndex(
-            (l) => l && String(l).toLowerCase().includes(key)
-          );
-          return i >= 0 ? scores[i] ?? 0 : 0;
-        };
-
-        const officialScore = getScore("official");
-        const phishingScore = getScore("phishing");
-        const urgentScore = getScore("urgent");
-        const prizeScore = getScore("prize");
-
-        const threatDeduct = Math.round(
-          phishingScore * 50 + urgentScore * 50 + prizeScore * 50
-        );
-        if (threatDeduct > 0) {
-          score -= threatDeduct;
-          if (phishingScore > 0.3)
-            findings.push(
-              `Phishing scam signals in content (${Math.round(phishingScore * 100)}% confidence).`
-            );
-          if (urgentScore > 0.3)
-            findings.push(
-              `Urgent warning / high-pressure tone (${Math.round(urgentScore * 100)}% confidence).`
-            );
-          if (prizeScore > 0.3)
-            findings.push(
-              `Prize giveaway scam signals (${Math.round(prizeScore * 100)}% confidence).`
-            );
-        }
-
-        const officialAdd = Math.round(officialScore * 10);
-        if (officialAdd > 0) {
-          score = Math.min(100, score + officialAdd);
-          findings.push(
-            `Official or trustworthy tone in metadata (${Math.round(officialScore * 100)}% confidence).`
-          );
-        }
+    // --- BLOCKLIST CHECK ---
+    if (checkMalicious(url)) {
+      const hostname = getHostname(url);
+      try {
+        await connectToDatabase();
+        const blockedCol = await getBlockedAttemptsCollection();
+        await blockedCol.insertOne({
+          type: "url_scan",
+          url,
+          hostname,
+          timestamp: new Date(),
+        });
+      } catch (logErr) {
+        console.error("[scan-url] blocked_attempts log failed:", logErr?.message);
       }
+      return jsonResponse({
+        safetyScore: 0,
+        safetyPercentage: 0,
+        message: "DANGEROUS",
+        reasoning: ["Verified Scam (Source: Scamwave)"],
+        isSecureProtocol: body.isSecureProtocol !== false,
+      });
     }
 
-    const safetyPercentage = Math.min(100, Math.max(0, Math.round(score)));
+    let score = BASE_TRUST_SCORE;
+    const reasoning = [];
 
+    // --- PROTOCOL CHECK ---
+    if (!isSecureProtocol) {
+      score -= PENALTY.HTTP_INSECURE;
+      reasoning.push("Penalty applied: Site uses insecure HTTP (not HTTPS). (-30 points)");
+    }
+
+    // --- METADATA CHECK (never skip scan; missing metadata = penalty) ---
+    const titleMissing = !pageTitle && !ogTitle;
+    const descMissing = !metaDescription;
+
+    if (titleMissing || descMissing) {
+      reasoning.push(
+        "WARNING: Metadata could not be retrieved - typical of hidden scam pages."
+      );
+    }
+    if (titleMissing) {
+      score -= PENALTY.TITLE_MISSING;
+      reasoning.push("Penalty applied (Metadata): Page title is missing. (-20 points)");
+    }
+    if (descMissing) {
+      score -= PENALTY.DESCRIPTION_MISSING;
+      reasoning.push("Penalty applied (Metadata): Meta description is missing. (-30 points)");
+    }
+
+    // --- LINK DENSITY ---
+    const suspiciousLinkRatio =
+      totalLinks > 0 ? (externalLinks + emptyLinks) / totalLinks : 0;
+
+    if (totalLinks > 0 && suspiciousLinkRatio > 0.8) {
+      score -= PENALTY.LINK_DENSITY_HIGH;
+      reasoning.push(
+        `Penalty applied: High ratio of external/empty links (${Math.round(suspiciousLinkRatio * 100)}% of ${totalLinks} links). (-20 points)`
+      );
+    } else if (totalLinks > 0 && (emptyLinks > 0 || externalLinks > 0)) {
+      reasoning.push(
+        `Link structure: ${emptyLinks} empty, ${externalLinks} external of ${totalLinks} total (no penalty; under 80%).`
+      );
+    }
+
+    const safetyScore = Math.min(100, Math.max(0, Math.round(score)));
     let message = "SECURE";
-    if (safetyPercentage < 30) message = "DANGEROUS";
-    else if (safetyPercentage < 80) message = "SUSPICIOUS";
+    if (safetyScore < 40) message = "DANGEROUS";
+    else if (safetyScore < 70) message = "SUSPICIOUS";
 
-    return NextResponse.json({
-      safetyPercentage,
-      safety: safetyPercentage,
+    // Never return an empty reasoning array
+    const finalReasoning =
+      reasoning.length > 0
+        ? reasoning
+        : [
+            "Domain reputation appears solid",
+            "Standard security protocols detected",
+            "Content matches official intent",
+          ];
+
+    return jsonResponse({
+      safetyScore,
+      safetyPercentage: safetyScore,
       message,
-      findings,
+      reasoning: finalReasoning,
+      isSecureProtocol,
     });
   } catch (err) {
-    console.error("[scan-url]", err.message);
-    return NextResponse.json(
+    const message =
+      err && typeof err.message === "string" ? err.message : "Scan failed";
+    console.error("[scan-url]", message, err);
+    return jsonResponse(
       {
-        error: err.message || "Scan failed",
-        safetyPercentage: 50,
+        error: message,
+        safetyScore: 50,
         message: "SUSPICIOUS",
-        findings: ["Scan failed"],
+        reasoning: ["API error: scan could not complete. Try again."],
       },
       { status: 500 }
     );

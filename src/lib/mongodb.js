@@ -115,3 +115,9 @@ export async function getIpLogsCollection() {
   const c = await connectToDatabase();
   return c.db().collection("ip_logs");
 }
+
+/** @returns {Promise<import("mongodb").Collection>} */
+export async function getBlockedAttemptsCollection() {
+  const c = await connectToDatabase();
+  return c.db().collection("blocked_attempts");
+}

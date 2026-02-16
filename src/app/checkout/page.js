@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SecurityOverlay from "@/components/SecurityOverlay";
@@ -12,6 +13,29 @@ import { useAuth } from "@/context/AuthContext";
 
 const PAYMENT_METHODS = { card: "card", upi: "upi", cod: "cod" };
 const VELOCITY_THRESHOLD_MS = 15 * 1000;
+const IPAPI_URL = "https://ipapi.co/json/";
+
+function getBrowserAndOSFromUA() {
+  if (typeof navigator === "undefined" || !navigator.userAgent) {
+    return { browser: "Unknown", os: "Unknown" };
+  }
+  const ua = navigator.userAgent;
+  let browser = "Other";
+  if (/Edg\//i.test(ua)) browser = "Edge";
+  else if (/Chrome\//i.test(ua) && !/Chromium/i.test(ua)) browser = "Chrome";
+  else if (/Safari\//i.test(ua) && !/Chrome/i.test(ua)) browser = "Safari";
+  else if (/Firefox\//i.test(ua)) browser = "Firefox";
+  let os = "Other";
+  if (/Windows/i.test(ua)) os = "Windows";
+  else if (/Mac OS X|Macintosh/i.test(ua)) os = "Mac";
+  else if (/Linux/i.test(ua)) os = "Linux";
+  return { browser, os };
+}
+
+function buildDeviceHash(ip, browser, os) {
+  const s = (v) => (v != null && String(v).trim() ? String(v).trim() : "unknown");
+  return `${s(ip)}|${s(browser)}|${s(os)}`;
+}
 
 function getCartQuantityRisk(cartQuantity) {
   const n = Math.floor((Number(cartQuantity) || 0) / 4);
@@ -251,7 +275,10 @@ export default function CheckoutPage() {
   const [blockReason, setBlockReason] = useState(null);
   const [fraudCountdown, setFraudCountdown] = useState(3);
   const [accountBanned, setAccountBanned] = useState(false);
+  const [securityLocation, setSecurityLocation] = useState({ city: null, ip: null });
+  const [deviceHash, setDeviceHash] = useState(null);
   const checkoutLandedAtRef = useRef(null);
+  const ipLogFetchedRef = useRef(false);
 
   const productNames = useMemo(() => items.map((i) => i.product.name).filter(Boolean), [items]);
   const cartQuantity = totalItems;
@@ -260,17 +287,52 @@ export default function CheckoutPage() {
     if (minTimePassed && requestDone) setShowOverlay(false);
   }, [minTimePassed, requestDone]);
 
-  // Redirect banned users to /banned page
+  // Redirect banned users to account-banned page
   useEffect(() => {
     const token = getToken?.();
     if (!token) return;
     fetch("/api/me", { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())
       .then((data) => {
-        if (data.banned) router.replace("/banned");
+        if (data.banned) router.replace("/account-banned");
       })
       .catch(() => {});
   }, [getToken, router]);
+
+  // Geolocation + DeviceHash: fetch ipapi.co, then log to /api/ip and redirect if banned
+  useEffect(() => {
+    if (ipLogFetchedRef.current) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(IPAPI_URL);
+        const data = await res.json().catch(() => ({}));
+        const ip = data.ip || "—";
+        const city = data.city || data.region || "—";
+        if (cancelled) return;
+        setSecurityLocation({ city, ip });
+        const { browser, os } = getBrowserAndOSFromUA();
+        const hash = buildDeviceHash(ip, browser, os);
+        setDeviceHash(hash);
+        ipLogFetchedRef.current = true;
+        const userId = user?.email || "guest";
+        const logRes = await fetch("/api/ip/log", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, accountId: userId, deviceHash: hash }),
+        });
+        const logData = await logRes.json().catch(() => ({}));
+        if (cancelled) return;
+        if (logData.banned === true || logData.highRisk === true) {
+          setAccountBanned(true);
+          router.replace("/account-banned");
+        }
+      } catch (_) {
+        if (!cancelled) setSecurityLocation({ city: "—", ip: "—" });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.email, router]);
 
   // On checkout page load: record landing time once and set persistent velocity risk (first item → checkout page)
   useEffect(() => {
@@ -341,7 +403,7 @@ export default function CheckoutPage() {
         });
         if (checkoutRes.status === 403) {
           setAccountBanned(true);
-          router.replace("/banned");
+          router.replace("/account-banned");
           return;
         }
       } catch (_) {
@@ -350,15 +412,16 @@ export default function CheckoutPage() {
     }
     const userId = user?.email || (email || mobile || "guest").toString().trim() || "guest";
     try {
+      const hash = deviceHash || buildDeviceHash(securityLocation.ip, ...Object.values(getBrowserAndOSFromUA()));
       const ipRes = await fetch("/api/ip/log", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, accountId: userId }),
+        body: JSON.stringify({ userId, accountId: userId, deviceHash: hash }),
       });
       const ipData = await ipRes.json().catch(() => ({}));
       if (ipData && (ipData.banned === true || ipData.highRisk === true)) {
         setAccountBanned(true);
-        router.replace("/banned");
+        router.replace("/account-banned");
         return;
       }
     } catch (_) {
@@ -580,6 +643,16 @@ export default function CheckoutPage() {
 
         <div className="mt-6 grid gap-8 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-6">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
+                Current Security Location
+              </p>
+              <p className="mt-1 font-medium text-slate-800">
+                {securityLocation.city != null && securityLocation.ip != null
+                  ? `${securityLocation.city}, ${securityLocation.ip}`
+                  : "Checking…"}
+              </p>
+            </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-slate-600">
                 {t("checkout.cartTotal")}: <span className="font-bold text-slate-900">{t("rupee")}{totalPrice.toLocaleString("en-IN")}</span>
@@ -715,13 +788,23 @@ export default function CheckoutPage() {
                 </div>
               )}
 
-              <button
+              <motion.button
                 type="submit"
                 disabled={loading || !validateMobile(mobile) || accountBanned}
                 className="w-full rounded-lg bg-slate-900 py-3 font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                animate={
+                  liveScore >= 50 && !loading && !accountBanned
+                    ? { x: [0, -10, 10, -10, 10, 0] }
+                    : {}
+                }
+                transition={{
+                  duration: 0.5,
+                  repeat: liveScore >= 50 && !loading ? Infinity : 0,
+                  repeatDelay: 2,
+                }}
               >
                 {loading ? "Checking..." : accountBanned ? "Account banned" : t("checkout.proceedToPay")}
-              </button>
+              </motion.button>
               {liveScore >= 60 && (
                 <p className="text-xs font-medium text-amber-600">Risk score is 60% or above. You can still try to pay; the system may block the transaction.</p>
               )}

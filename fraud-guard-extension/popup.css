@@ -78,6 +78,47 @@ body {
   font-style: italic;
 }
 
+.protocol-status {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.protocol-status.visible {
+  display: flex;
+}
+
+.protocol-status.insecure {
+  background: rgba(239, 68, 68, 0.25);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #fecaca;
+}
+
+.protocol-status.secure {
+  background: rgba(34, 197, 94, 0.2);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #86efac;
+}
+
+.protocol-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.protocol-status.insecure .protocol-icon {
+  color: #ef4444;
+}
+
+.protocol-status.secure .protocol-icon {
+  color: #22c55e;
+}
+
 .scan-btn {
   width: 100%;
   padding: 18px 24px;
@@ -242,6 +283,15 @@ body {
 .score-status {
   font-size: 0.8rem;
   color: rgba(255, 255, 255, 0.85);
+}
+
+.score-gradient-bar {
+  width: 100%;
+  height: 6px;
+  margin-top: 10px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ef4444 0%, #eab308 50%, #22c55e 100%);
+  opacity: 0.9;
 }
 
 .detection-details {
