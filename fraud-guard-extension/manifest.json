@@ -1,17 +1,1 @@
-{
-  "manifest_version": 3,
-  "name": "Fraud Guard",
-  "version": "1.0.0",
-  "description": "AI-powered URL safety scanner to detect phishing and scam sites",
-  "permissions": ["tabs", "activeTab", "storage", "scripting"],
-  "host_permissions": ["http://localhost:3000/*", "https://*/*", "http://*/*"],
-  "action": { "default_popup": "popup.html" },
-  "background": { "service_worker": "background.js" },
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ]
-}
+{"manifest_version":3,"name":"Fraud Guard","version":"1.0.0","description":"AI-powered URL safety scanner to detect phishing and scam sites","permissions":["tabs","activeTab","storage","scripting"],"host_permissions":["http://localhost:3000/*","https://fraud-alertv3.vercel.app/*","https://*/*","http://*/*"],"action":{"default_popup":"popup.html"},"background":{"service_worker":"background.js"},"content_scripts":[{"matches":["http://*/*","https://*/*"],"js":["content.js"],"run_at":"document_idle"}]}

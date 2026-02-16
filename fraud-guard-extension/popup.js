@@ -1,7 +1,7 @@
-// Fetch is in background.js – set API_BASE_URL there to your production Vercel URL with https://
-// e.g. https://your-app.vercel.app (API path /api/scan-url is appended there)
-// API returns: { safetyScore, safetyPercentage, message, reasoning, isSecureProtocol }
-const API_BASE_URL = "https://your-app.vercel.app";
+// API is called from background.js; production URL: https://fraud-alertv3.vercel.app/api/scan-url
+// popup sends { action: "scanUrl" }; background gets url + metadata from the active tab and fetches the API
+const API_BASE_URL = "https://fraud-alertv3.vercel.app";
+
 
 (function () {
   const scanBtn = document.getElementById("scanBtn");
@@ -96,16 +96,23 @@ const API_BASE_URL = "https://your-app.vercel.app";
   }
 
   scanBtn.addEventListener("click", async () => {
+    const listEl = document.getElementById("detectionDetailsList");
+    if (listEl) listEl.innerHTML = "";
+
     try {
       scanBtn.disabled = true;
       loading.classList.add("visible");
       scoreSection.classList.remove("visible");
 
-      // Clear AI Insights immediately so old "No Insight" messages never persist
-      const listEl = document.getElementById("detectionDetailsList");
-      if (listEl) listEl.innerHTML = "";
-
-      const response = await chrome.runtime.sendMessage({ action: "scanUrl" });
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      const response = await chrome.runtime.sendMessage({
+        action: "scanUrl",
+        url: tab?.url || undefined,
+        metadata: undefined,
+      });
 
       loading.classList.remove("visible");
       scoreSection.classList.add("visible");

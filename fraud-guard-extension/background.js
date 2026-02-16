@@ -1,7 +1,6 @@
 // Background: extract page data via executeScript for reasoning-based security engine
-// Production: set to your live Vercel URL with https:// (e.g. https://your-app.vercel.app)
-// Fetch URL used: ${API_BASE_URL}/api/scan-url
-const API_BASE_URL = "https://your-app.vercel.app";
+// Production: use https:// only to avoid CORS/redirect blocks on Vercel
+const API_BASE_URL = "https://fraud-alertv3.vercel.app";
 
 /**
  * Injected into the tab. Extracts:
@@ -70,7 +69,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         active: true,
         currentWindow: true,
       });
-      const url = tab?.url || null;
+      const url = request.url || tab?.url || null;
 
       if (!url) {
         return { success: false, error: "No active tab" };
@@ -115,20 +114,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       const apiBase =
         (await chrome.storage.local.get("apiBase")).apiBase || API_BASE_URL;
-      const res = await fetch(`${apiBase}/api/scan-url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: pageData.fullUrl,
-          pageTitle: pageData.pageTitle,
-          metaDescription: pageData.metaDescription,
-          ogTitle: pageData.ogTitle,
-          totalLinks: pageData.totalLinks,
-          externalLinks: pageData.externalLinks,
-          emptyLinks: pageData.emptyLinks,
-          isSecureProtocol,
-        }),
-      });
+      const fetchUrl = `${apiBase.replace(/^http:\/\//i, "https://")}/api/scan-url`;
+
+      let res;
+      try {
+        res = await fetch(fetchUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: pageData.fullUrl,
+            pageTitle: pageData.pageTitle,
+            metaDescription: pageData.metaDescription,
+            ogTitle: pageData.ogTitle,
+            totalLinks: pageData.totalLinks,
+            externalLinks: pageData.externalLinks,
+            emptyLinks: pageData.emptyLinks,
+            isSecureProtocol,
+          }),
+        });
+      } catch (fetchErr) {
+        return {
+          success: false,
+          error: "Security Server unreachable. Please check your internet or Vercel logs.",
+        };
+      }
 
       let data;
       try {
@@ -136,7 +145,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } catch (parseErr) {
         return {
           success: false,
-          error: "Server returned invalid response. Check API URL is your live Vercel URL (e.g. https://your-app.vercel.app).",
+          error: "Security Server unreachable. Please check your internet or Vercel logs.",
         };
       }
       if (!res.ok) {
@@ -146,9 +155,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         };
       }
 
+      console.log("Vercel Response:", data);
       return { success: true, url: pageData.fullUrl, data };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return {
+        success: false,
+        error: "Security Server unreachable. Please check your internet or Vercel logs.",
+      };
     }
   })().then(sendResponse);
 
